@@ -14,6 +14,8 @@ import {
 } from "./provider-usage.history.js";
 import type { UsageSummary } from "./provider-usage.types.js";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 const codexRecord = (params: {
   at: number;
   usedPercent: number;
@@ -72,6 +74,12 @@ describe("provider usage history", () => {
 
         const filePath = resolveProviderUsageHistoryPath();
         expect(filePath).toBe(path.join(stateDir, "usage", "provider-usage-snapshots.jsonl"));
+        if (process.platform !== "win32") {
+          const usageDirStat = await fs.stat(path.dirname(filePath));
+          const fileStat = await fs.stat(filePath);
+          expect(usageDirStat.mode & 0o777).toBe(0o700);
+          expect(fileStat.mode & 0o777).toBe(0o600);
+        }
         const raw = await fs.readFile(filePath, "utf8");
         expect(raw).toContain("openai-codex");
         expect(raw).toContain("usedPercent");
@@ -103,6 +111,87 @@ describe("provider usage history", () => {
             plan: "plus",
             windows: [{ label: "5h", usedPercent: 12.5, resetAt: 5000 }],
           },
+        ]);
+      });
+    });
+  });
+
+  it("retains recent snapshots and compacts old or malformed history after append", async () => {
+    await withTempDir("openclaw-provider-usage-retention-", async (stateDir) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const now = 40 * DAY_MS;
+        const filePath = resolveProviderUsageHistoryPath();
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(
+          filePath,
+          [
+            JSON.stringify({
+              recordedAt: now - 30 * DAY_MS - 1,
+              provider: "openai-codex",
+              displayName: "Codex",
+              windows: [{ label: "5h", usedPercent: 1 }],
+              secret: "old-secret",
+            }),
+            JSON.stringify({
+              recordedAt: now - 30 * DAY_MS,
+              provider: "openai-codex",
+              displayName: " Codex ",
+              plan: " plus ",
+              windows: [{ label: " 5h ", usedPercent: 2, token: "raw-window-token" }],
+              prompt: "raw prompt must be removed",
+            }),
+            "{not-json",
+          ].join("\n") + "\n",
+          "utf8",
+        );
+
+        await appendProviderUsageHistory(codexSummary({ at: now, usedPercent: 3 }));
+
+        const raw = await fs.readFile(filePath, "utf8");
+        expect(raw).not.toContain("old-secret");
+        expect(raw).not.toContain("raw prompt");
+        expect(raw).not.toContain("raw-window-token");
+        expect(raw).not.toContain("{not-json");
+        expect(raw.trim().split("\n")).toHaveLength(2);
+        expect(await loadProviderUsageHistory({ sinceMs: 0 })).toEqual([
+          {
+            recordedAt: now - 30 * DAY_MS,
+            provider: "openai-codex",
+            displayName: "Codex",
+            plan: "plus",
+            windows: [{ label: "5h", usedPercent: 2 }],
+          },
+          {
+            recordedAt: now,
+            provider: "openai-codex",
+            displayName: "Codex",
+            plan: "plus",
+            windows: [{ label: "5h", usedPercent: 3 }],
+          },
+        ]);
+      });
+    });
+  });
+
+  it("serializes same-process concurrent appends without losing records", async () => {
+    await withTempDir("openclaw-provider-usage-concurrent-", async (stateDir) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const baseAt = 100 * DAY_MS;
+        await Promise.all(
+          Array.from({ length: 8 }, (_, index) =>
+            appendProviderUsageHistory(
+              codexSummary({ at: baseAt + index, usedPercent: index + 1 }),
+            ),
+          ),
+        );
+
+        const loaded = await loadProviderUsageHistory({ sinceMs: 0 });
+        expect(loaded).toHaveLength(8);
+        expect(loaded.map((record) => record.recordedAt)).toEqual(
+          Array.from({ length: 8 }, (_, index) => baseAt + index),
+        );
+        expect(loaded.map((record) => record.windows[0]?.usedPercent)).toEqual([
+          1, 2, 3, 4, 5, 6, 7, 8,
         ]);
       });
     });

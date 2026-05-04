@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { withFileLock } from "./file-lock.js";
+import { createAsyncLock, writeTextAtomic } from "./json-files.js";
 import { usageProviders } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -57,6 +59,19 @@ type ProviderUsageWindowSnapshot = {
   record: ProviderUsageHistoryRecord;
   window: ProviderUsageHistoryRecord["windows"][number];
 };
+
+const PROVIDER_USAGE_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const PROVIDER_USAGE_HISTORY_LOCK_OPTIONS = {
+  retries: {
+    retries: 10,
+    factor: 1.4,
+    minTimeout: 20,
+    maxTimeout: 500,
+    randomize: true,
+  },
+  stale: 30_000,
+};
+const withProviderUsageHistoryWriteQueue = createAsyncLock();
 
 export type TokenUsageChunkInput = {
   startAt: number;
@@ -116,11 +131,24 @@ export async function appendProviderUsageHistory(summary: UsageSummary): Promise
   }
 
   const filePath = resolveProviderUsageHistoryPath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await fs.appendFile(filePath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  const dirPath = path.dirname(filePath);
+  await fs.mkdir(dirPath, { recursive: true, mode: 0o700 });
+  await fs.chmod(dirPath, 0o700).catch(() => undefined);
+  await withProviderUsageHistoryWriteQueue(() =>
+    withFileLock(filePath, PROVIDER_USAGE_HISTORY_LOCK_OPTIONS, async () => {
+      await fs.mkdir(dirPath, { recursive: true, mode: 0o700 });
+      await fs.chmod(dirPath, 0o700).catch(() => undefined);
+      await fs.appendFile(filePath, serializeProviderUsageHistoryRecords(records), {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await fs.chmod(filePath, 0o600).catch(() => undefined);
+      await compactProviderUsageHistoryFile({
+        filePath,
+        cutoffMs: summary.updatedAt - PROVIDER_USAGE_HISTORY_RETENTION_MS,
+      }).catch(() => undefined);
+    }),
+  );
 }
 
 function normalizeProviderUsageHistoryRecord(value: unknown): ProviderUsageHistoryRecord | null {
@@ -171,20 +199,19 @@ function normalizeProviderUsageHistoryRecord(value: unknown): ProviderUsageHisto
   };
 }
 
-export async function loadProviderUsageHistory(params: {
-  sinceMs: number;
-  filePath?: string;
-}): Promise<ProviderUsageHistoryRecord[]> {
-  const filePath = params.filePath ?? resolveProviderUsageHistoryPath();
-  let raw: string;
-  try {
-    raw = await fs.readFile(filePath, "utf8");
-  } catch {
-    return [];
+function serializeProviderUsageHistoryRecords(records: ProviderUsageHistoryRecord[]): string {
+  if (!records.length) {
+    return "";
   }
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+}
 
+function parseProviderUsageHistoryLines(params: {
+  raw: string;
+  sinceMs: number;
+}): ProviderUsageHistoryRecord[] {
   const records: ProviderUsageHistoryRecord[] = [];
-  for (const line of raw.split("\n")) {
+  for (const line of params.raw.split("\n")) {
     if (!line.trim()) {
       continue;
     }
@@ -199,6 +226,43 @@ export async function loadProviderUsageHistory(params: {
     }
   }
   return records.toSorted((a, b) => a.recordedAt - b.recordedAt);
+}
+
+async function compactProviderUsageHistoryFile(params: {
+  filePath: string;
+  cutoffMs: number;
+}): Promise<void> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(params.filePath, "utf8");
+  } catch {
+    return;
+  }
+  const compacted = serializeProviderUsageHistoryRecords(
+    parseProviderUsageHistoryLines({ raw, sinceMs: params.cutoffMs }),
+  );
+  if (compacted === raw) {
+    return;
+  }
+  await writeTextAtomic(params.filePath, compacted, {
+    mode: 0o600,
+    ensureDirMode: 0o700,
+  });
+}
+
+export async function loadProviderUsageHistory(params: {
+  sinceMs: number;
+  filePath?: string;
+}): Promise<ProviderUsageHistoryRecord[]> {
+  const filePath = params.filePath ?? resolveProviderUsageHistoryPath();
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch {
+    return [];
+  }
+
+  return parseProviderUsageHistoryLines({ raw, sinceMs: params.sinceMs });
 }
 
 function currentRecordsFromSummary(summary: UsageSummary): ProviderUsageHistoryRecord[] {
