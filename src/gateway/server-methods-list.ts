@@ -19,6 +19,7 @@ const BASE_METHODS = [
   "channels.logout",
   "status",
   "usage.status",
+  "usage.agentSummary",
   "usage.cost",
   "tts.status",
   "tts.providers",

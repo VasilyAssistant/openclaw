@@ -77,6 +77,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "channels.status",
     "status",
     "usage.status",
+    "usage.agentSummary",
     "usage.cost",
     "tts.status",
     "tts.providers",
