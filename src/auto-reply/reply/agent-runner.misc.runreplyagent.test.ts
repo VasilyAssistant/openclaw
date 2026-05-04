@@ -2274,6 +2274,47 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).toContain(`· session \`${sessionKey}\``);
   });
 
+  it("emits diagnostic log instead of fabricating footer when accumulated usage is absent", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          lastCallUsage: { input: 42, output: 9, cacheRead: 3, cacheWrite: 1 },
+        },
+      },
+    });
+
+    const diagnostics: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnostics.push(event));
+    const sessionKey = "agent:main:telegram:direct:1000";
+    const res = await (async () => {
+      try {
+        const reply = await createRun({ responseUsage: "tokens", sessionKey });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        return reply;
+      } finally {
+        unsubscribe();
+      }
+    })();
+
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).not.toContain("Usage:");
+
+    const missingUsageLog = diagnostics.find(
+      (event) => event.type === "log.record" && event.message === "response_usage_missing",
+    );
+    expect(missingUsageLog?.attributes).toMatchObject({
+      responseUsageMode: "tokens",
+      hasLastCallUsage: true,
+      sessionKey,
+      provider: "anthropic",
+      model: "claude",
+    });
+  });
+
   it("does not append session key when responseUsage=tokens", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
