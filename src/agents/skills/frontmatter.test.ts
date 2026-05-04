@@ -6,15 +6,18 @@ describe("resolveSkillInvocationPolicy", () => {
     const policy = resolveSkillInvocationPolicy({});
     expect(policy.userInvocable).toBe(true);
     expect(policy.disableModelInvocation).toBe(false);
+    expect(policy.requiresUserApproval).toBe(false);
   });
 
   it("parses frontmatter boolean strings", () => {
     const policy = resolveSkillInvocationPolicy({
       "user-invocable": "no",
       "disable-model-invocation": "yes",
+      "requires-user-approval": "true",
     });
     expect(policy.userInvocable).toBe(false);
     expect(policy.disableModelInvocation).toBe(true);
+    expect(policy.requiresUserApproval).toBe(true);
   });
 });
 

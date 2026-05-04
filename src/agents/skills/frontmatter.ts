@@ -215,6 +215,10 @@ export function resolveSkillInvocationPolicy(
       getFrontmatterString(frontmatter, "disable-model-invocation"),
       false,
     ),
+    requiresUserApproval: parseFrontmatterBool(
+      getFrontmatterString(frontmatter, "requires-user-approval"),
+      false,
+    ),
   };
 }
 
