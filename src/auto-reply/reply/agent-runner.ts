@@ -1531,6 +1531,39 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+    if (responseUsageMode !== "off" && !hasNonzeroUsage(usage)) {
+      const hasLastCallUsage = hasNonzeroUsage(runResult.meta?.agentMeta?.lastCallUsage);
+      logVerbose(
+        `Response usage footer requested but agentMeta.usage is missing or zero; ` +
+          `provider=${providerUsed ?? "unknown"} model=${modelUsed ?? "unknown"} ` +
+          `hasLastCallUsage=${hasLastCallUsage ? "true" : "false"}`,
+      );
+      if (isDiagnosticsEnabled(cfg)) {
+        emitTrustedDiagnosticEvent({
+          type: "log.record",
+          level: "warn",
+          message: "response_usage_missing",
+          loggerName: "auto-reply.agent-runner",
+          ...(runResult.diagnosticTrace
+            ? {
+                trace: freezeDiagnosticTraceContext(
+                  createChildDiagnosticTraceContext(runResult.diagnosticTrace),
+                ),
+              }
+            : {}),
+          attributes: {
+            responseUsageMode,
+            hasLastCallUsage,
+            sessionKey: sessionKey ?? "",
+            sessionId: followupRun.run.sessionId,
+            channel: replyToChannel ?? "",
+            agentId: followupRun.run.agentId,
+            provider: providerUsed ?? "",
+            model: modelUsed ?? "",
+          },
+        });
+      }
+    }
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg, undefined, {
         workspaceDir: followupRun.run.workspaceDir,
