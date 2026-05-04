@@ -91,6 +91,11 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--experimental-strip-types", "scripts/write-cli-compat.ts"],
   },
+  {
+    label: "check-package-dist-imports",
+    kind: "node",
+    args: ["scripts/check-package-dist-imports.mjs"],
+  },
 ];
 
 export const BUILD_ALL_PROFILES = {
@@ -111,6 +116,7 @@ export const BUILD_ALL_PROFILES = {
     "write-build-info",
     "write-cli-startup-metadata",
     "write-cli-compat",
+    "check-package-dist-imports",
   ],
   gatewayWatch: [
     "tsdown",
@@ -118,6 +124,7 @@ export const BUILD_ALL_PROFILES = {
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+    "check-package-dist-imports",
   ],
   cliStartup: [
     "tsdown",
