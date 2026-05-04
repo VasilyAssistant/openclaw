@@ -15,6 +15,8 @@ export interface Skill {
   disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.
   source: string;
+  /** If true, the agent must ask for explicit user approval before reading/following this skill. */
+  requiresUserApproval?: boolean;
 }
 
 export function createSyntheticSourceInfo(
@@ -69,6 +71,9 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
     if (skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
+    }
+    if (skill.requiresUserApproval === true) {
+      lines.push("    <requires_user_approval>true</requires_user_approval>");
     }
     lines.push("  </skill>");
   }

@@ -36,6 +36,9 @@ export type OpenClawSkillMetadata = {
 export type SkillInvocationPolicy = {
   userInvocable: boolean;
   disableModelInvocation: boolean;
+  // Optional: every reader treats absence as false (checks `=== true`), matching
+  // the skill-contract shape. Keeps existing policy fixtures valid without a default.
+  requiresUserApproval?: boolean;
 };
 
 export type SkillCommandDispatchSpec = {

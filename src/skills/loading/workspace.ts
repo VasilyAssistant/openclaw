@@ -1272,6 +1272,9 @@ export function formatSkillsCompact(skills: Skill[]): string {
     if (skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
     }
+    if (skill.requiresUserApproval === true) {
+      lines.push("    <requires_user_approval>true</requires_user_approval>");
+    }
     lines.push("  </skill>");
   }
   lines.push("</available_skills>");
@@ -1444,11 +1447,15 @@ function resolveWorkspaceSkillPromptState(
   const promptEntries = filterPromptVisibleSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
+  const promptFacingSkills = promptEntries.map((entry) => ({
+    ...entry.skill,
+    requiresUserApproval: entry.invocation?.requiresUserApproval === true,
+  }));
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
   // Budget checks and final render both use this same representation so the
   // tier decision is based on the exact strings that end up in the prompt.
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
-  const promptSkills = compactSkillPaths(resolvedSkills).toSorted((a, b) =>
+  const promptSkills = compactSkillPaths(promptFacingSkills).toSorted((a, b) =>
     a.name.localeCompare(b.name, "en"),
   );
   const { skillsForPrompt, compact } = applySkillsPromptLimits({

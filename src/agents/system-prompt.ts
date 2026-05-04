@@ -275,6 +275,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "## Skills",
     `Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with \`${params.readToolName}\`, then follow it.`,
     "If a skill's <version> differs from a previous turn, re-read that skill before using it.",
+    "If the selected skill has `<requires_user_approval>true</requires_user_approval>`, ask for explicit user approval before reading or following it.",
     "If several apply, choose the most specific. If none clearly apply, read none.",
     "One skill up front max. Never guess/fabricate skill paths.",
     "External API writes: batch when safe, avoid tight loops, respect 429/Retry-After.",
