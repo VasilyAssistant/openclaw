@@ -35,6 +35,7 @@ export type OpenClawSkillMetadata = {
 export type SkillInvocationPolicy = {
   userInvocable: boolean;
   disableModelInvocation: boolean;
+  requiresUserApproval: boolean;
 };
 
 export type SkillCommandDispatchSpec = {
