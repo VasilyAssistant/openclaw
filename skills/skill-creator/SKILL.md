@@ -1,6 +1,7 @@
 ---
 name: skill-creator
 description: Create, edit, improve, tidy, review, audit, or restructure AgentSkills and SKILL.md files.
+requires-user-approval: true
 ---
 
 # Skill Creator

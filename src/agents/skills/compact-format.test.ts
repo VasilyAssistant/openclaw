@@ -71,6 +71,13 @@ describe("formatSkillsCompact", () => {
     expect(out).toContain("hidden");
   });
 
+  it("marks approval-required skills in full format", () => {
+    const out = formatSkillsForPrompt([
+      { ...makeSkill("skill-creator"), requiresUserApproval: true },
+    ]);
+    expect(out).toContain("<requires_user_approval>true</requires_user_approval>");
+  });
+
   it("returns empty string for no skills", () => {
     expect(formatSkillsCompact([])).toBe("");
   });
@@ -88,6 +95,13 @@ describe("formatSkillsCompact", () => {
     const out = formatSkillsCompact([makeSkill("visible"), hidden]);
     expect(out).toContain("visible");
     expect(out).toContain("hidden");
+  });
+
+  it("marks approval-required skills in compact format", () => {
+    const out = formatSkillsCompact([
+      { ...makeSkill("skill-creator"), requiresUserApproval: true },
+    ]);
+    expect(out).toContain("<requires_user_approval>true</requires_user_approval>");
   });
 
   it("escapes XML special characters", () => {
@@ -112,6 +126,29 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   });
 
   afterEach(() => restoreMockSkillsHomeEnv(envSnapshot));
+
+  it("carries invocation approval metadata into the available skills prompt", () => {
+    const entry = makeEntry(makeSkill("skill-creator"));
+    entry.invocation = {
+      userInvocable: true,
+      disableModelInvocation: false,
+      requiresUserApproval: true,
+    };
+
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [entry],
+      config: {
+        skills: {
+          limits: {
+            maxSkillsPromptChars: 4_000,
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    expect(prompt).toContain("skill-creator");
+    expect(prompt).toContain("<requires_user_approval>true</requires_user_approval>");
+  });
 
   it("respects explicit exposure metadata before compact formatting", () => {
     const hidden = makeEntry({ ...makeSkill("hidden"), disableModelInvocation: true });

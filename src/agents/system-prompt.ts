@@ -199,6 +199,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
     `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
+    "- Exception: if the selected skill entry has `<requires_user_approval>true</requires_user_approval>`, ask for explicit user approval before reading or following that skill.",
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
