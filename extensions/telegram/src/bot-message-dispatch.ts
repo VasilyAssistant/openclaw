@@ -157,6 +157,7 @@ type DispatchTelegramMessageParams = {
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
+type TelegramVerboseLevel = "off" | "on" | "full";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
 
@@ -350,6 +351,68 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
   });
 }
 
+function normalizeTelegramVerboseLevel(raw: unknown): TelegramVerboseLevel | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const key = raw.trim().toLowerCase();
+  if (!key) {
+    return undefined;
+  }
+  if (["off", "false", "no", "0"].includes(key)) {
+    return "off";
+  }
+  if (["full", "all", "everything"].includes(key)) {
+    return "full";
+  }
+  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
+    return "on";
+  }
+  return undefined;
+}
+
+function resolveTelegramVerboseSessionKeys(ctxPayload: {
+  SessionKey?: unknown;
+  CommandTargetSessionKey?: unknown;
+  CommandSource?: unknown;
+}): string[] {
+  const sessionKey = normalizeTelegramFenceKey(ctxPayload.SessionKey);
+  const commandTargetSessionKey = normalizeTelegramFenceKey(ctxPayload.CommandTargetSessionKey);
+  const ordered =
+    ctxPayload.CommandSource === "native" ? [commandTargetSessionKey, sessionKey] : [sessionKey];
+  return ordered.filter((key, index): key is string =>
+    Boolean(key && ordered.indexOf(key) === index),
+  );
+}
+
+function resolveTelegramVerboseLevel(params: {
+  cfg: OpenClawConfig;
+  sessionKeys: readonly string[];
+  agentId: string;
+  telegramDeps: TelegramBotDeps;
+}): TelegramVerboseLevel | undefined {
+  const { cfg, sessionKeys, agentId, telegramDeps } = params;
+  if (sessionKeys.length === 0) {
+    return undefined;
+  }
+  try {
+    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
+    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+      skipCache: true,
+    });
+    for (const sessionKey of sessionKeys) {
+      const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const level = normalizeTelegramVerboseLevel(entry?.verboseLevel);
+      if (level) {
+        return level;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
 
 function clipProgressMarkdownText(text: string): string {
@@ -483,6 +546,12 @@ export const dispatchTelegramMessage = async ({
     agentId: route.agentId,
     telegramDeps,
   });
+  const resolvedVerboseLevel = resolveTelegramVerboseLevel({
+    cfg,
+    sessionKeys: resolveTelegramVerboseSessionKeys(ctxPayload),
+    agentId: route.agentId,
+    telegramDeps,
+  });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const streamDeliveryEnabled = streamMode !== "off";
@@ -583,8 +652,11 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const sessionVerboseOff = resolvedVerboseLevel === "off";
   const streamToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+    Boolean(answerLane.stream) &&
+    resolveChannelStreamingPreviewToolProgress(telegramCfg) &&
+    !sessionVerboseOff;
   let streamToolProgressSuppressed = false;
   let streamToolProgressLines: string[] = [];
   let lastAnswerPartialText = "";
@@ -602,7 +674,7 @@ export const dispatchTelegramMessage = async ({
     activeAnswerDraftIsToolProgressOnly = true;
   }
   const renderProgressDraft = async (options?: { flush?: boolean }) => {
-    if (!answerLane.stream || streamMode !== "progress") {
+    if (!answerLane.stream || streamMode !== "progress" || sessionVerboseOff) {
       return;
     }
     const streamText = formatChannelProgressDraftText({
@@ -659,6 +731,9 @@ export const dispatchTelegramMessage = async ({
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
       answerLane.stream.update(streamText);
+      return;
+    }
+    if (sessionVerboseOff) {
       return;
     }
     if (streamToolProgressEnabled && !streamToolProgressSuppressed && normalized) {
@@ -1466,7 +1541,7 @@ export const dispatchTelegramMessage = async ({
                         })
                     : undefined,
                   suppressDefaultToolProgressMessages:
-                    !streamDeliveryEnabled || Boolean(answerLane.stream),
+                    !streamDeliveryEnabled || Boolean(answerLane.stream) || sessionVerboseOff,
                   allowProgressCallbacksWhenSourceDeliverySuppressed: Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
