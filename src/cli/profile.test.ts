@@ -269,6 +269,34 @@ describe("formatCliCommand", () => {
     );
   });
 
+  it("uses safe CLI display names in formatted hints", () => {
+    expect(
+      formatCliCommand("openclaw security audit", { OPENCLAW_CLI_DISPLAY_NAME: "clawctl" }),
+    ).toBe("clawctl security audit");
+    expect(
+      formatCliCommand("openclaw security audit", {
+        OPENCLAW_CLI_DISPLAY_NAME: "clawctl",
+        OPENCLAW_PROFILE: "custom",
+      }),
+    ).toBe("clawctl --profile custom security audit");
+  });
+
+  it("suppresses profile hints when the wrapper owns the profile", () => {
+    expect(
+      formatCliCommand("openclaw security audit", {
+        OPENCLAW_CLI_DISPLAY_NAME: "clawctl",
+        OPENCLAW_PROFILE: "custom",
+        OPENCLAW_CLI_IMPLICIT_PROFILE: "1",
+      }),
+    ).toBe("clawctl security audit");
+  });
+
+  it("ignores unsafe CLI display names", () => {
+    expect(
+      formatCliCommand("openclaw status", { OPENCLAW_CLI_DISPLAY_NAME: "clawctl; rm -rf /" }),
+    ).toBe("openclaw status");
+  });
+
   it("inserts --container when a container hint is set", () => {
     expect(
       formatCliCommand("openclaw gateway status --deep", { OPENCLAW_CONTAINER_HINT: "demo" }),
