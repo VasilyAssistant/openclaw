@@ -209,6 +209,11 @@ const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
 
+function resolvePathOverride(name: string): string | null {
+  const value = normalizeOptionalString(process.env[name]);
+  return value ? expandHomePrefix(value) : null;
+}
+
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
@@ -217,11 +222,11 @@ function hashExecApprovalsRaw(raw: string | null): string {
 }
 
 export function resolveExecApprovalsPath(): string {
-  return expandHomePrefix(DEFAULT_FILE);
+  return resolvePathOverride("OPENCLAW_EXEC_APPROVALS") ?? expandHomePrefix(DEFAULT_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return expandHomePrefix(DEFAULT_SOCKET);
+  return resolvePathOverride("OPENCLAW_EXEC_APPROVALS_SOCKET") ?? expandHomePrefix(DEFAULT_SOCKET);
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
