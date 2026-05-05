@@ -62,6 +62,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   if (originalOpenClawHome === undefined) {
     delete process.env.OPENCLAW_HOME;
   } else {
@@ -214,6 +215,19 @@ describe("exec approvals store helpers", () => {
 
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(true);
     expect(fs.existsSync(path.join(dir, ".clawdbot", "exec-approvals.json"))).toBe(false);
+  });
+
+  it("honors explicit file and socket path overrides", () => {
+    const dir = createHomeDir();
+    vi.stubEnv("OPENCLAW_EXEC_APPROVALS", "~/openclaw-runtime/exec-approvals.json");
+    vi.stubEnv("OPENCLAW_EXEC_APPROVALS_SOCKET", path.join(dir, "runtime", "exec-approvals.sock"));
+
+    expect(path.normalize(resolveExecApprovalsPath())).toBe(
+      path.normalize(path.join(dir, "openclaw-runtime", "exec-approvals.json")),
+    );
+    expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
+      path.normalize(path.join(dir, "runtime", "exec-approvals.sock")),
+    );
   });
 
   it("merges socket defaults from normalized, current, and built-in fallback", () => {

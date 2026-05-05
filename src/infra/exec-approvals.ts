@@ -288,6 +288,11 @@ const DEFAULT_EXEC_APPROVALS_STATE_DIR = "~/.openclaw";
 const EXEC_APPROVALS_FILE = "exec-approvals.json";
 const EXEC_APPROVALS_SOCKET = "exec-approvals.sock";
 
+function resolvePathOverride(name: string): string | null {
+  const value = normalizeOptionalString(process.env[name]);
+  return value ? expandHomePrefix(value) : null;
+}
+
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
@@ -314,14 +319,26 @@ function resolveExecApprovalsStateDir(env: NodeJS.ProcessEnv = process.env): {
 }
 
 export function resolveExecApprovalsPath(): string {
-  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_FILE);
+  // Vasily harness pins the exec-approvals file under its own runtime dir, which
+  // is intentionally separate from OPENCLAW_STATE_DIR; honor that override first.
+  return (
+    resolvePathOverride("OPENCLAW_EXEC_APPROVALS") ??
+    path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_FILE)
+  );
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
+  return (
+    resolvePathOverride("OPENCLAW_EXEC_APPROVALS_SOCKET") ??
+    path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET)
+  );
 }
 
 export function resolveExecApprovalsDisplayPath(): string {
+  const override = resolvePathOverride("OPENCLAW_EXEC_APPROVALS");
+  if (override) {
+    return override;
+  }
   const stateDir = resolveExecApprovalsStateDir().displayPath;
   return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
     ? `${stateDir}/${EXEC_APPROVALS_FILE}`
@@ -329,6 +346,10 @@ export function resolveExecApprovalsDisplayPath(): string {
 }
 
 export function resolveExecApprovalsTranscriptPath(): string {
+  // Keep transcripts free of absolute host paths: surface the env var name.
+  if (process.env.OPENCLAW_EXEC_APPROVALS?.trim()) {
+    return "$OPENCLAW_EXEC_APPROVALS";
+  }
   return process.env.OPENCLAW_STATE_DIR?.trim()
     ? `$OPENCLAW_STATE_DIR/${EXEC_APPROVALS_FILE}`
     : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/${EXEC_APPROVALS_FILE}`;
