@@ -2223,7 +2223,19 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const overrides = {
       verboseLevel: "on",
       thinkingLevel: "high",
+      fastMode: false,
       reasoningLevel: "low",
+      elevatedLevel: "on",
+      execHost: "gateway",
+      execSecurity: "allowlist",
+      execAsk: "on-miss",
+      execNode: "mac-mini",
+      responseUsage: "full",
+      sendPolicy: "deny",
+      queueMode: "queue",
+      queueDebounceMs: 250,
+      queueCap: 9,
+      queueDrop: "old",
       label: "telegram-priority",
     } as const;
     const cases = [
@@ -2269,6 +2281,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
       expectEntryFields(result.sessionEntry, overrides, testCase.name);
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey], testCase.name).toMatchObject(overrides);
     }
   });
 
@@ -2430,6 +2445,10 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 1,
       verboseLevel: "on",
+      queueMode: "queue",
+      queueDebounceMs: 250,
+      queueCap: 9,
+      queueDrop: "old",
     } as const;
     const cases = [
       { name: "new clears auto-sourced overrides", body: "/new" },
@@ -2475,6 +2494,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBeUndefined();
       // Unrelated behavior overrides still carry across the reset.
       expect(result.sessionEntry.verboseLevel, testCase.name).toBe(autoOverrides.verboseLevel);
+      expect(result.sessionEntry.queueMode, testCase.name).toBe(autoOverrides.queueMode);
+      expect(result.sessionEntry.queueDebounceMs, testCase.name).toBe(
+        autoOverrides.queueDebounceMs,
+      );
+      expect(result.sessionEntry.queueCap, testCase.name).toBe(autoOverrides.queueCap);
+      expect(result.sessionEntry.queueDrop, testCase.name).toBe(autoOverrides.queueDrop);
     }
   });
 

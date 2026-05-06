@@ -302,16 +302,28 @@ export async function initSessionState(params: {
   let resetTriggered = false;
 
   let persistedThinking: string | undefined;
+  let persistedFastMode: SessionEntry["fastMode"];
   let persistedVerbose: string | undefined;
   let persistedTrace: string | undefined;
   let persistedReasoning: string | undefined;
+  let persistedElevated: SessionEntry["elevatedLevel"];
   let persistedTtsAuto: TtsAutoMode | undefined;
+  let persistedExecHost: SessionEntry["execHost"];
+  let persistedExecSecurity: SessionEntry["execSecurity"];
+  let persistedExecAsk: SessionEntry["execAsk"];
+  let persistedExecNode: SessionEntry["execNode"];
+  let persistedResponseUsage: SessionEntry["responseUsage"];
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
   let persistedModelOverrideSource: SessionEntry["modelOverrideSource"];
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
+  let persistedSendPolicy: SessionEntry["sendPolicy"];
+  let persistedQueueMode: SessionEntry["queueMode"];
+  let persistedQueueDebounceMs: SessionEntry["queueDebounceMs"];
+  let persistedQueueCap: SessionEntry["queueCap"];
+  let persistedQueueDrop: SessionEntry["queueDrop"];
   let persistedLabel: string | undefined;
   let persistedSpawnedBy: SessionEntry["spawnedBy"];
   let persistedSpawnedWorkspaceDir: SessionEntry["spawnedWorkspaceDir"];
@@ -493,16 +505,28 @@ export async function initSessionState(params: {
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;
     persistedThinking = entry.thinkingLevel;
+    persistedFastMode = entry.fastMode;
     persistedVerbose = entry.verboseLevel;
     persistedTrace = entry.traceLevel;
     persistedReasoning = entry.reasoningLevel;
+    persistedElevated = entry.elevatedLevel;
     persistedTtsAuto = entry.ttsAuto;
+    persistedExecHost = entry.execHost;
+    persistedExecSecurity = entry.execSecurity;
+    persistedExecAsk = entry.execAsk;
+    persistedExecNode = entry.execNode;
+    persistedResponseUsage = entry.responseUsage;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
     persistedModelOverrideSource = entry.modelOverrideSource;
     persistedAuthProfileOverride = entry.authProfileOverride;
     persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
     persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+    persistedSendPolicy = entry.sendPolicy;
+    persistedQueueMode = entry.queueMode;
+    persistedQueueDebounceMs = entry.queueDebounceMs;
+    persistedQueueCap = entry.queueCap;
+    persistedQueueDrop = entry.queueDrop;
     persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
@@ -510,14 +534,21 @@ export async function initSessionState(params: {
     systemSent = false;
     abortedLastRun = false;
     // When a reset trigger (/new, /reset) starts a new session, carry over
-    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
-    // so the user doesn't have to re-enable them every time.
+    // user-set behavior and policy overrides so the user doesn't have to
+    // re-enable them every time.
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
+      persistedFastMode = entry.fastMode;
       persistedVerbose = entry.verboseLevel;
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
+      persistedElevated = entry.elevatedLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedExecHost = entry.execHost;
+      persistedExecSecurity = entry.execSecurity;
+      persistedExecAsk = entry.execAsk;
+      persistedExecNode = entry.execNode;
+      persistedResponseUsage = entry.responseUsage;
       // Only carry over user-driven overrides on reset. Auto-created
       // fallback overrides (e.g. rate-limit auth rotation, model auto-pin)
       // must be cleared so /new and /reset actually return the session to
@@ -531,6 +562,11 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount =
         preservedSelection.authProfileOverrideCompactionCount;
+      persistedSendPolicy = entry.sendPolicy;
+      persistedQueueMode = entry.queueMode;
+      persistedQueueDebounceMs = entry.queueDebounceMs;
+      persistedQueueCap = entry.queueCap;
+      persistedQueueDrop = entry.queueDrop;
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;
@@ -636,13 +672,19 @@ export async function initSessionState(params: {
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
     systemSent,
     abortedLastRun,
-    // Persist previously stored thinking/verbose levels when present.
+    // Persist previously stored behavior and policy overrides when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
+    fastMode: persistedFastMode ?? baseEntry?.fastMode,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
     traceLevel: persistedTrace ?? baseEntry?.traceLevel,
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
+    elevatedLevel: persistedElevated ?? baseEntry?.elevatedLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
-    responseUsage: baseEntry?.responseUsage,
+    execHost: persistedExecHost ?? baseEntry?.execHost,
+    execSecurity: persistedExecSecurity ?? baseEntry?.execSecurity,
+    execAsk: persistedExecAsk ?? baseEntry?.execAsk,
+    execNode: persistedExecNode ?? baseEntry?.execNode,
+    responseUsage: persistedResponseUsage ?? baseEntry?.responseUsage,
     usageFamilyKey,
     usageFamilySessionIds,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
@@ -664,11 +706,11 @@ export async function initSessionState(params: {
     spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
     subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
     subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
-    sendPolicy: baseEntry?.sendPolicy,
-    queueMode: baseEntry?.queueMode,
-    queueDebounceMs: baseEntry?.queueDebounceMs,
-    queueCap: baseEntry?.queueCap,
-    queueDrop: baseEntry?.queueDrop,
+    sendPolicy: persistedSendPolicy ?? baseEntry?.sendPolicy,
+    queueMode: persistedQueueMode ?? baseEntry?.queueMode,
+    queueDebounceMs: persistedQueueDebounceMs ?? baseEntry?.queueDebounceMs,
+    queueCap: persistedQueueCap ?? baseEntry?.queueCap,
+    queueDrop: persistedQueueDrop ?? baseEntry?.queueDrop,
     displayName: persistedDisplayName ?? baseEntry?.displayName,
     chatType: baseEntry?.chatType,
     channel: baseEntry?.channel,
