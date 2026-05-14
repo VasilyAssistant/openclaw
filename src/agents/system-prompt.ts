@@ -730,6 +730,8 @@ export function buildAgentSystemPrompt(params: {
       "On-demand list, steer, or kill sub-agent runs for this requester session; do not use for wait loops",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    usage:
+      "Read structured token usage and provider quota deltas for the current or another visible session",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
   };
@@ -760,6 +762,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_yield",
     "subagents",
     "session_status",
+    "usage",
     "image",
     "image_generate",
   ];
@@ -992,6 +995,7 @@ export function buildAgentSystemPrompt(params: {
             "- sessions_yield: end this turn and wait for sub-agent completion events",
             "- subagents: list/steer/kill sub-agent runs",
             '- session_status: show usage/time/model state and answer "what model are we using?"',
+            "- usage: show structured token usage and provider quota deltas",
           ].join("\n"),
       "TOOLS.md is usage guidance, not availability.",
       `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,

@@ -68,6 +68,29 @@ describe("usage tool", () => {
     expect(result.details).toEqual({ ok: true });
   });
 
+  it("uses the injected gateway caller for embedded mode", async () => {
+    const callGateway = vi.fn(async () => ({ embedded: true }));
+    const tool = createUsageTool({
+      agentSessionKey: "agent:main:main",
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("call-1", { includeChunks: true });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "usage.agentSummary",
+      params: {
+        key: "agent:main:main",
+        windowMinutes: undefined,
+        chunkMinutes: undefined,
+        includeChunks: true,
+      },
+      scopes: [READ_SCOPE],
+    });
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+    expect(result.details).toEqual({ embedded: true });
+  });
+
   it("allows an explicit visible session key and chunk size", async () => {
     const tool = createUsageTool({
       agentSessionKey: "agent:main:main",

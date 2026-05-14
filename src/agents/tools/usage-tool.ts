@@ -1,7 +1,9 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { callGateway } from "../../gateway/call.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
+import { describeUsageTool, USAGE_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 import {
@@ -20,17 +22,19 @@ const UsageToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
 });
 
+type GatewayCaller = typeof callGateway;
+
 export function createUsageTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Usage",
     name: "usage",
-    displaySummary: "Read token usage and provider quota percentages for the current session.",
-    description:
-      "Readonly usage report. Defaults to current session and last 20 minutes. Returns token totals, message/request counts, current provider quota percentages, and observed percentage deltas when history exists.",
+    displaySummary: USAGE_TOOL_DISPLAY_SUMMARY,
+    description: describeUsageTool(),
     parameters: UsageToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -80,17 +84,19 @@ export function createUsageTool(opts?: {
           error: access.error,
         });
       }
-      const result = await callGatewayTool(
-        "usage.agentSummary",
-        {},
-        {
-          key: visibleSession.key,
-          windowMinutes: params.windowMinutes,
-          chunkMinutes: params.chunkMinutes,
-          includeChunks: params.includeChunks,
-        },
-        { scopes: [READ_SCOPE] },
-      );
+      const usageParams = {
+        key: visibleSession.key,
+        windowMinutes: params.windowMinutes,
+        chunkMinutes: params.chunkMinutes,
+        includeChunks: params.includeChunks,
+      };
+      const result = opts?.callGateway
+        ? await opts.callGateway({
+            method: "usage.agentSummary",
+            params: usageParams,
+            scopes: [READ_SCOPE],
+          })
+        : await callGatewayTool("usage.agentSummary", {}, usageParams, { scopes: [READ_SCOPE] });
       return jsonResult(result);
     },
   };

@@ -432,15 +432,12 @@ export function createOpenClawTools(
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
     }),
-    ...(embedded
-      ? []
-      : [
-          createUsageTool({
-            agentSessionKey: options?.agentSessionKey,
-            config: resolvedConfig,
-            sandboxed: options?.sandboxed,
-          }),
-        ]),
+    createUsageTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: resolvedConfig,
+      sandboxed: options?.sandboxed,
+      callGateway: embedded ? effectiveCallGateway : undefined,
+    }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");

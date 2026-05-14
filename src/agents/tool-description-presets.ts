@@ -9,6 +9,8 @@ export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another vis
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent sessions.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status, usage, and model state.";
+export const USAGE_TOOL_DISPLAY_SUMMARY =
+  "Read structured session token usage and provider quota deltas.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work plan.";
 
 export function describeSessionsListTool(): string {
@@ -69,6 +71,14 @@ export function describeSessionStatusTool(): string {
     'Use `sessionKey="current"` for the current session; do not use UI/client labels such as `openclaw-tui` as session keys.',
     "Optional `model` sets a per-session model override; `model=default` resets overrides.",
     "Use this for questions like what model is active or how a session is configured.",
+  ].join(" ");
+}
+
+export function describeUsageTool(): string {
+  return [
+    "Read a structured usage report for the current or another visible session.",
+    "Returns token totals, message/request counts, provider quota windows, and optional chunked token-per-quota deltas.",
+    'Use `sessionKey="current"` for the current session when you need machine-readable usage rather than the session_status card.',
   ].join(" ");
 }
 

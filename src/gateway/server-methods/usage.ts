@@ -16,6 +16,7 @@ import {
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
+  CostUsageTotals,
   SessionCostSummary,
   SessionDailyModelUsage,
   SessionMessageCounts,
@@ -31,7 +32,6 @@ import {
   type DiscoveredSession,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
-import type { CostUsageTotals, SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";

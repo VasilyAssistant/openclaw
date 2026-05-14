@@ -80,6 +80,13 @@ export type BoundTaskFlowRuntime = {
     blockedSummary?: string | null;
     updatedAt?: number;
   }) => ManagedTaskFlowMutationResult;
+  updateState: (params: {
+    flowId: string;
+    expectedRevision: number;
+    currentStep?: string | null;
+    stateJson?: JsonValue | null;
+    updatedAt?: number;
+  }) => ManagedTaskFlowMutationResult;
   resume: (params: {
     flowId: string;
     expectedRevision: number;
@@ -112,6 +119,7 @@ export type BoundTaskFlowRuntime = {
   cancel: (params: { flowId: string; cfg: OpenClawConfig }) => Promise<BoundTaskFlowCancelResult>;
   runTask: (params: {
     flowId: string;
+    expectedRevision?: number;
     runtime: TaskRuntime;
     sourceId?: string;
     childSessionKey?: string;
@@ -131,6 +139,10 @@ export type BoundTaskFlowRuntime = {
 };
 
 export type PluginRuntimeTaskFlow = {
+  readonly features: {
+    readonly updateState: true;
+    readonly runTaskExpectedRevision: true;
+  };
   bindSession: (params: {
     sessionKey: string;
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];

@@ -13,6 +13,7 @@ export {
   setFlowWaiting,
   syncFlowFromTask,
   updateFlowRecordByIdExpectedRevision,
+  updateFlowState,
 } from "./task-flow-registry.js";
 
 export type { TaskFlowUpdateResult } from "./task-flow-registry.js";
