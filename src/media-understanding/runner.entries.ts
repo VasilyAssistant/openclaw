@@ -268,6 +268,8 @@ async function resolveCliMediaPath(params: {
         "16000",
         "-c:a",
         "pcm_s16le",
+        "-f",
+        "wav",
         outputPath,
       ]);
     },
