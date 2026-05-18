@@ -48,14 +48,20 @@ type ResumeManagedLobsterFlowParams = {
   expectedRevision: number;
   currentStep?: string;
   waitingStep?: string;
+  beforeFinalize?: (params: {
+    flow: FlowRecord;
+    envelope: LobsterEnvelope;
+    expectedRevision: number;
+  }) => JsonLike | undefined | Promise<JsonLike | undefined>;
 };
 
 export type ManagedLobsterFlowResult =
   | {
       ok: true;
-      envelope: LobsterEnvelope;
+      envelope: Extract<LobsterEnvelope, { ok: true }>;
       flow: FlowRecord;
       mutation: MutationResult;
+      sideEffect?: JsonLike;
     }
   | {
       ok: false;
@@ -235,6 +241,11 @@ export async function resumeManagedLobsterFlow(
 
   try {
     const envelope = await params.runner.run(params.runnerParams);
+    const sideEffect = await params.beforeFinalize?.({
+      flow: resumed.flow,
+      envelope,
+      expectedRevision: resumed.flow.revision,
+    });
     const mutation = applyEnvelopeToFlow({
       taskFlow: params.taskFlow,
       flow: resumed.flow,
@@ -254,6 +265,7 @@ export async function resumeManagedLobsterFlow(
       envelope,
       flow: resumed.flow,
       mutation,
+      ...(sideEffect !== undefined ? { sideEffect } : {}),
     };
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));

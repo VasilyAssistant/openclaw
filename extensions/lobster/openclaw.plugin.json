@@ -49,6 +49,65 @@
               "enum": ["taskflow", "plugin-inline"],
               "description": "Use taskflow to leave Lobster approvals in waitJson, or plugin-inline to request plugin approval and resume in the same tool call."
             },
+            "onApproved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["taskTemplate"],
+              "description": "Optional trusted side effect after inline approval and successful Lobster resume.",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["runTask"]
+                },
+                "runtime": {
+                  "type": "string",
+                  "enum": ["subagent", "acp", "cli", "cron"]
+                },
+                "taskTemplate": {
+                  "type": "string"
+                },
+                "labelTemplate": {
+                  "type": "string"
+                },
+                "sourceIdTemplate": {
+                  "type": "string"
+                },
+                "childSessionKeyTemplate": {
+                  "type": "string"
+                },
+                "agentIdTemplate": {
+                  "type": "string"
+                },
+                "runIdTemplate": {
+                  "type": "string"
+                },
+                "progressSummaryTemplate": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["queued", "running"]
+                },
+                "notifyPolicy": {
+                  "type": "string",
+                  "enum": ["done_only", "state_changes", "silent"]
+                },
+                "deliveryStatus": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "delivered",
+                    "session_queued",
+                    "failed",
+                    "parent_missing",
+                    "not_applicable"
+                  ]
+                },
+                "preferMetadata": {
+                  "type": "boolean"
+                }
+              }
+            },
             "cwd": {
               "type": "string"
             },
