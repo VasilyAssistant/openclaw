@@ -44,6 +44,7 @@ describe("tool-catalog", () => {
       "sessions_yield",
       "subagents",
       "session_status",
+      "usage",
       "cron",
       "get_goal",
       "create_goal",
@@ -65,10 +66,11 @@ describe("tool-catalog", () => {
       "sessions_history",
       "sessions_send",
       "session_status",
+      "usage",
       "message",
       "bundle-mcp",
     ]);
-    expect(requirePolicyAllow("minimal")).toEqual(["session_status"]);
+    expect(requirePolicyAllow("minimal")).toEqual(["session_status", "usage"]);
   });
 
   it("full profile uses wildcard to grant all tools (#76507)", () => {

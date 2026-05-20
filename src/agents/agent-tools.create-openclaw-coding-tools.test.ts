@@ -509,6 +509,25 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("message")).toBe(false);
   });
 
+  it("materializes usage for a narrow runtime allowlist", () => {
+    const tools = applyRuntimeToolsAllow(
+      createOpenClawCodingTools({
+        config: testConfig,
+        runtimeToolAllowlist: ["usage"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      }),
+      ["usage"],
+    );
+
+    expect(tools.map((tool) => tool.name)).toEqual(["usage"]);
+  });
+
   it("passes plugin suppression into OpenClaw tool construction plans", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

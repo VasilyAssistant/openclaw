@@ -15,10 +15,18 @@ import {
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  appendProviderUsageHistory,
+  buildProviderUsageDeltas,
+  buildProviderUsageEfficiencyChunks,
+  buildProviderUsageEfficiencySummary,
+  type TokenUsageChunkInput,
+  loadProviderUsageHistory,
+} from "../../infra/provider-usage.history.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
-  CostUsageSummary,
   CostUsageTotals,
+  CostUsageSummary,
   SessionCostSummary,
   SessionDailyModelUsage,
   SessionMessageCounts,
@@ -915,10 +923,171 @@ export { testApi as __test };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
+function buildTokenChunksFromQuarterHours(params: {
+  summary: SessionCostSummary | null;
+  startMs: number;
+  endMs: number;
+  chunkMinutes: number;
+}): TokenUsageChunkInput[] {
+  const buckets = params.summary?.utcQuarterHourTokenUsage ?? [];
+  if (!buckets.length) {
+    return [];
+  }
+  const chunkMs = Math.max(1, params.chunkMinutes) * 60_000;
+  const chunks = new Map<number, TokenUsageChunkInput>();
+  for (const bucket of buckets) {
+    const bucketStart =
+      Date.parse(`${bucket.date}T00:00:00.000Z`) + bucket.quarterIndex * 15 * 60_000;
+    if (
+      !Number.isFinite(bucketStart) ||
+      bucketStart < params.startMs ||
+      bucketStart >= params.endMs
+    ) {
+      continue;
+    }
+    const chunkStart =
+      params.startMs + Math.floor((bucketStart - params.startMs) / chunkMs) * chunkMs;
+    const existing = chunks.get(chunkStart) ?? {
+      startAt: chunkStart,
+      endAt: Math.min(chunkStart + chunkMs, params.endMs),
+      tokens: 0,
+    };
+    existing.tokens += bucket.totalTokens;
+    chunks.set(chunkStart, existing);
+  }
+  return Array.from(chunks.values()).toSorted((a, b) => a.startAt - b.startAt);
+}
+
+function selectSafeUsageTotals(summary: SessionCostSummary | null): CostUsageTotals | null {
+  if (!summary) {
+    return null;
+  }
+  return {
+    input: summary.input,
+    output: summary.output,
+    cacheRead: summary.cacheRead,
+    cacheWrite: summary.cacheWrite,
+    totalTokens: summary.totalTokens,
+    totalCost: summary.totalCost,
+    inputCost: summary.inputCost,
+    outputCost: summary.outputCost,
+    cacheReadCost: summary.cacheReadCost,
+    cacheWriteCost: summary.cacheWriteCost,
+    missingCostEntries: summary.missingCostEntries,
+  };
+}
+
+async function appendProviderUsageHistoryBestEffort(
+  summary: Awaited<ReturnType<typeof loadProviderUsageSummary>>,
+): Promise<void> {
+  try {
+    await appendProviderUsageHistory(summary);
+  } catch {
+    // Usage history is sanitized accounting metadata; reporting must not fail if it cannot persist.
+  }
+}
+
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond }) => {
     const summary = await loadProviderUsageSummary();
+    await appendProviderUsageHistoryBestEffort(summary);
     respond(true, summary, undefined);
+  },
+  "usage.agentSummary": async ({ respond, params, context }) => {
+    const key = normalizeOptionalString(params?.key) ?? null;
+    if (!key) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key is required"));
+      return;
+    }
+
+    const now = Date.now();
+    const windowMinutes =
+      typeof params?.windowMinutes === "number" && Number.isFinite(params.windowMinutes)
+        ? Math.max(1, Math.min(24 * 60, Math.floor(params.windowMinutes)))
+        : 20;
+    const chunkMinutes =
+      typeof params?.chunkMinutes === "number" && Number.isFinite(params.chunkMinutes)
+        ? Math.max(5, Math.min(windowMinutes, Math.floor(params.chunkMinutes)))
+        : Math.min(60, Math.max(15, windowMinutes));
+    const includeChunks = params?.includeChunks === true;
+    const windowMs = windowMinutes * 60_000;
+    const startMs = now - windowMs;
+
+    const resolved = resolveSessionUsageFileOrRespond(key, respond, context.getRuntimeConfig());
+    if (!resolved) {
+      return;
+    }
+    const sessionUsage = await loadSessionCostSummaryFromCache({
+      sessionId: resolved.sessionId,
+      sessionEntry: resolved.entry,
+      sessionFile: resolved.sessionFile,
+      config: resolved.config,
+      agentId: resolved.agentId,
+      startMs,
+      endMs: now,
+      refreshMode: "sync-when-empty",
+    });
+    const tokenChunks = includeChunks
+      ? buildTokenChunksFromQuarterHours({
+          summary: sessionUsage.summary,
+          startMs,
+          endMs: now,
+          chunkMinutes,
+        })
+      : [];
+    let providerCurrent: Awaited<ReturnType<typeof loadProviderUsageSummary>> = {
+      updatedAt: now,
+      providers: [],
+    };
+    let providerHistory: Awaited<ReturnType<typeof loadProviderUsageHistory>> = [];
+    let providerError: { message: string } | undefined;
+    try {
+      providerCurrent = await loadProviderUsageSummary();
+      await appendProviderUsageHistoryBestEffort(providerCurrent);
+      providerHistory = await loadProviderUsageHistory({ sinceMs: startMs - 6 * 60 * 60_000 });
+    } catch {
+      providerError = { message: "Provider usage unavailable" };
+    }
+    const efficiencyChunks = includeChunks
+      ? buildProviderUsageEfficiencyChunks({
+          current: providerCurrent,
+          history: providerHistory,
+          tokenChunks,
+          chunkMinutes,
+        })
+      : undefined;
+
+    respond(
+      true,
+      {
+        updatedAt: now,
+        windowMs,
+        session: {
+          key,
+          totals: selectSafeUsageTotals(sessionUsage.summary),
+          messages: sessionUsage.summary?.messageCounts,
+          calls:
+            sessionUsage.summary?.modelUsage?.reduce((sum, entry) => sum + entry.count, 0) ?? 0,
+          partial: sessionUsage.cacheStatus.status === "partial" || sessionUsage.summary === null,
+          cacheStatus: sessionUsage.cacheStatus,
+        },
+        providerUsage: {
+          current: providerCurrent,
+          deltas: buildProviderUsageDeltas({
+            current: providerCurrent,
+            history: providerHistory,
+            targetAt: startMs,
+          }),
+          efficiencyChunks,
+          efficiencySummary:
+            efficiencyChunks !== undefined
+              ? buildProviderUsageEfficiencySummary(efficiencyChunks)
+              : undefined,
+          error: providerError,
+        },
+      },
+      undefined,
+    );
   },
   "usage.cost": async ({ respond, params, context }) => {
     const config = context.getRuntimeConfig();

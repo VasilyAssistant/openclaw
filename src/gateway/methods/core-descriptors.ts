@@ -36,6 +36,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "channels.logout", scope: "operator.admin" },
   { name: "status", scope: "operator.read" },
   { name: "usage.status", scope: "operator.read" },
+  { name: "usage.agentSummary", scope: "operator.read" },
   { name: "usage.cost", scope: "operator.read" },
   { name: "tts.status", scope: "operator.read" },
   { name: "tts.providers", scope: "operator.read" },

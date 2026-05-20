@@ -12,6 +12,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+  USAGE_TOOL_DISPLAY_SUMMARY,
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 
@@ -200,6 +201,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "session_status",
     label: "session_status",
     description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+    sectionId: "sessions",
+    profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "usage",
+    label: "usage",
+    description: USAGE_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
     includeInOpenClawGroup: true,

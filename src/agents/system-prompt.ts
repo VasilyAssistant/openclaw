@@ -775,6 +775,8 @@ export function buildAgentSystemPrompt(params: {
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     skill_workshop:
       "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
+    usage:
+      "Read structured token usage and provider quota deltas for the current or another visible session",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
   };
@@ -806,6 +808,7 @@ export function buildAgentSystemPrompt(params: {
     "subagents",
     "session_status",
     "skill_workshop",
+    "usage",
     "image",
     "image_generate",
   ];

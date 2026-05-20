@@ -184,6 +184,44 @@ describe("handleUsageCommand", () => {
     expect(args.sessionFile).toBe("/tmp/target-session.jsonl");
   });
 
+  it("reports token usage by date for /usage stats", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage stats";
+    loadCostUsageSummaryMock.mockResolvedValue({
+      updatedAt: 0,
+      days: 30,
+      daily: [
+        { ...buildCostTotals({ totalTokens: 0 }), date: "2026-05-03" },
+        {
+          ...buildCostTotals({
+            input: 1200,
+            output: 300,
+            cacheRead: 400,
+            cacheWrite: 50,
+            totalTokens: 1950,
+          }),
+          date: "2026-05-04",
+        },
+      ],
+      totals: buildCostTotals({
+        input: 1200,
+        output: 300,
+        cacheRead: 400,
+        cacheWrite: 50,
+        totalTokens: 1950,
+      }),
+    });
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("📊 Usage tokens");
+    expect(result?.reply?.text).toContain("2026-05-04: 1.9k tokens");
+    expect(result?.reply?.text).toContain("in 1.2k / out 300");
+    expect(result?.reply?.text).toContain("cache 400 cached / 50 new");
+    expect(result?.reply?.text).toContain("Total 30d: 1.9k tokens");
+  });
+
   it("prefers the target session entry from sessionStore for /usage footer mode", async () => {
     const params = buildUsageParams();
     params.command.commandBodyNormalized = "/usage";

@@ -20,6 +20,11 @@ describe("tool mutation helpers", () => {
     ).toBe(true);
   });
 
+  it("treats usage as read-only", () => {
+    expect(isLikelyMutatingToolName("usage")).toBe(false);
+    expect(isMutatingToolCall("usage", { sessionKey: "current" })).toBe(false);
+  });
+
   it("builds stable fingerprints for mutating calls and omits read-only calls", () => {
     const writeFingerprint = buildToolActionFingerprint(
       "write",

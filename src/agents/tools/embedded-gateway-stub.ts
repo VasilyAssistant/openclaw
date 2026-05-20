@@ -9,6 +9,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { usageHandlers } from "../../gateway/server-methods/usage.js";
 import type { ReadSessionMessagesAsyncOptions } from "../../gateway/session-utils.fs.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
@@ -200,6 +201,43 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   };
 }
 
+function embeddedGatewayHandlerErrorMessage(error: unknown): string {
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+  }
+  return "usage.agentSummary failed";
+}
+
+async function handleUsageAgentSummary(params: Record<string, unknown>) {
+  const rt = await getRuntime();
+  let ok: boolean | undefined;
+  let payload: unknown;
+  let error: unknown;
+
+  await usageHandlers["usage.agentSummary"]({
+    req: { id: "embedded-usage-agent-summary", method: "usage.agentSummary", params } as never,
+    params,
+    client: null,
+    isWebchatConnect: () => false,
+    respond: (nextOk, nextPayload, nextError) => {
+      ok = nextOk;
+      payload = nextPayload;
+      error = nextError;
+    },
+    context: {
+      getRuntimeConfig: rt.getRuntimeConfig,
+    } as never,
+  });
+
+  if (ok === true) {
+    return payload;
+  }
+  throw new Error(embeddedGatewayHandlerErrorMessage(error));
+}
+
 /** Creates a local callGateway replacement for supported session methods. */
 export function createEmbeddedCallGateway(): EmbeddedCallGateway {
   return async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> => {
@@ -213,6 +251,8 @@ export function createEmbeddedCallGateway(): EmbeddedCallGateway {
         return (await handleSessionsResolve(params)) as T;
       case "chat.history":
         return (await handleChatHistory(params)) as T;
+      case "usage.agentSummary":
+        return (await handleUsageAgentSummary(params)) as T;
       default:
         throw new Error(
           `Method "${method}" requires a running gateway (unavailable in local embedded mode).`,

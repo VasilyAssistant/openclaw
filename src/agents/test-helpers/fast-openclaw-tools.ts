@@ -44,6 +44,7 @@ const coreTools = [
   stubActionTool("subagents", ["list", "show"]),
   stubActionTool("session_status", ["get", "show"]),
   stubTool("skill_workshop"),
+  stubTool("usage"),
   stubActionTool("browser", ["status", "snapshot"]),
   stubTool("tts"),
   stubTool("image_generate"),

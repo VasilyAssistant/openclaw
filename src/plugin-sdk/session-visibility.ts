@@ -30,7 +30,7 @@ export type AgentToAgentPolicy = {
 };
 
 /** Session operation whose visibility error copy should be rendered. */
-export type SessionAccessAction = "history" | "send" | "list" | "status";
+export type SessionAccessAction = "history" | "send" | "list" | "status" | "usage";
 
 /** Result of checking whether one session operation may target a session. */
 export type SessionAccessResult =
@@ -216,6 +216,9 @@ function actionPrefix(action: SessionAccessAction): string {
   if (action === "status") {
     return "Session status";
   }
+  if (action === "usage") {
+    return "Session usage";
+  }
   return "Session list";
 }
 
@@ -228,6 +231,9 @@ function a2aDisabledMessage(action: SessionAccessAction): string {
   }
   if (action === "status") {
     return "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
+  }
+  if (action === "usage") {
+    return "Agent-to-agent usage is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
   }
   return "Agent-to-agent listing is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent visibility.";
 }
@@ -242,6 +248,9 @@ function a2aDeniedMessage(action: SessionAccessAction): string {
   if (action === "status") {
     return "Agent-to-agent status denied by tools.agentToAgent.allow.";
   }
+  if (action === "usage") {
+    return "Agent-to-agent usage denied by tools.agentToAgent.allow.";
+  }
   return "Agent-to-agent listing denied by tools.agentToAgent.allow.";
 }
 
@@ -254,6 +263,9 @@ function crossVisibilityMessage(action: SessionAccessAction): string {
   }
   if (action === "status") {
     return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+  }
+  if (action === "usage") {
+    return "Session usage visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
   }
   return "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
 }

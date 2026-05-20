@@ -92,6 +92,10 @@ vi.mock("./tools/session-status-tool.js", () => ({
   },
 }));
 
+vi.mock("./tools/usage-tool.js", () => ({
+  createUsageTool: () => mocks.stubTool("usage"),
+}));
+
 vi.mock("./tools/sessions-history-tool.js", () => ({
   createSessionsHistoryTool: () => mocks.stubTool("sessions_history"),
 }));
