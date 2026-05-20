@@ -18,6 +18,7 @@ import {
   requestFlowCancel,
   resumeFlow,
   setFlowWaiting,
+  updateFlowState,
 } from "../../tasks/task-flow-runtime-internal.js";
 import type { TaskDeliveryState } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -168,6 +169,28 @@ function createBoundTaskFlowRuntime(params: {
         }),
       );
     },
+    updateState: (input) => {
+      const flow = resolveManagedFlowForOwner({
+        flowId: input.flowId,
+        ownerKey,
+      });
+      if (!flow.ok) {
+        return {
+          applied: false,
+          code: flow.code,
+          ...(flow.current ? { current: flow.current } : {}),
+        };
+      }
+      return mapFlowUpdateResult(
+        updateFlowState({
+          flowId: flow.flow.flowId,
+          expectedRevision: input.expectedRevision,
+          currentStep: input.currentStep,
+          stateJson: input.stateJson,
+          updatedAt: input.updatedAt,
+        }),
+      );
+    },
     resume: (input) => {
       const flow = resolveManagedFlowForOwner({
         flowId: input.flowId,
@@ -266,6 +289,7 @@ function createBoundTaskFlowRuntime(params: {
     runTask: (input) => {
       const created = runTaskInFlowForOwner({
         flowId: input.flowId,
+        expectedRevision: input.expectedRevision,
         callerOwnerKey: ownerKey,
         runtime: input.runtime,
         sourceId: input.sourceId,
@@ -319,6 +343,10 @@ function createBoundTaskFlowRuntime(params: {
 
 export function createRuntimeTaskFlow(): PluginRuntimeTaskFlow {
   return {
+    features: {
+      updateState: true,
+      runTaskExpectedRevision: true,
+    },
     bindSession: (params) =>
       createBoundTaskFlowRuntime({
         sessionKey: params.sessionKey,

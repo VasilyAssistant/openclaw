@@ -119,6 +119,7 @@ export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRe
 
 type RunTaskInFlowParams = {
   flowId: string;
+  expectedRevision?: number;
   runtime: TaskRuntime;
   sourceId?: string;
   childSessionKey?: string;
@@ -498,6 +499,14 @@ export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult 
       flow,
     };
   }
+  if (typeof params.expectedRevision === "number" && flow.revision !== params.expectedRevision) {
+    return {
+      found: true,
+      created: false,
+      reason: "Flow revision conflict.",
+      flow,
+    };
+  }
 
   const common = {
     runtime: params.runtime,
@@ -558,6 +567,7 @@ export function runTaskInFlowForOwner(
   }
   return runTaskInFlow({
     flowId: flow.flowId,
+    expectedRevision: params.expectedRevision,
     runtime: params.runtime,
     sourceId: params.sourceId,
     childSessionKey: params.childSessionKey,

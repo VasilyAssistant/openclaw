@@ -636,6 +636,37 @@ describe("task-executor", () => {
     });
   });
 
+  it("rejects managed TaskFlow child spawning when expected revision is stale", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Protected flow",
+      });
+
+      const created = runTaskInFlowForOwner({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision + 1,
+        callerOwnerKey: "agent:main:main",
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-stale-revision",
+        task: "Should be denied",
+      });
+
+      expect(created).toMatchObject({
+        found: true,
+        created: false,
+        reason: "Flow revision conflict.",
+        flow: {
+          flowId: flow.flowId,
+          revision: flow.revision,
+        },
+      });
+      expect(findLatestTaskForFlowId(flow.flowId)).toBeUndefined();
+    });
+  });
+
   it("cancels active ACP child tasks", async () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
