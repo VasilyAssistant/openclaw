@@ -25,6 +25,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "sessions_yield",
   "subagents",
   "session_status",
+  "usage",
 ] as const;
 
 // Provider docking: keep sandbox policy aligned with provider tool names.

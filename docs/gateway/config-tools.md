@@ -22,9 +22,9 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 
 | Profile     | Includes                                                                                                                        |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                                           |
+| `minimal`   | `session_status`, `usage`                                                                                                       |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `video_generate` |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                       |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`, `usage`                              |
 | `full`      | No restriction (same as unset)                                                                                                  |
 
 ### Tool groups
@@ -33,7 +33,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
 | `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                         |
 | `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                  |
-| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
+| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `usage` |
 | `group:memory`     | `memory_search`, `memory_get`                                                                                           |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                   |
 | `group:ui`         | `browser`, `canvas`                                                                                                     |

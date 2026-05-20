@@ -85,11 +85,15 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Web                    | Search the web, search X posts, or fetch readable page content                | `web_search`, `x_search`, `web_fetch`                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                 |
 | Browser                | Operate a browser session                                                     | `browser`                                                            | [Browser](/tools/browser)                                              |
 | Messaging and channels | Send replies or channel actions                                               | `message`                                                            | [Agent send](/tools/agent-send)                                        |
-| Sessions and agents    | Inspect sessions, delegate work, steer another run, or report status          | `sessions_*`, `subagents`, `agents_list`, `session_status`           | [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
+| Sessions and agents    | Inspect sessions, delegate work, steer another run, or report status          | `sessions_*`, `subagents`, `agents_list`, `session_status`, `usage`  | [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
 | Automation             | Schedule work or respond to background events                                 | `cron`, `heartbeat_respond`                                          | [Automation](/automation)                                              |
 | Gateway and nodes      | Inspect Gateway state or paired target devices                                | `gateway`, `nodes`                                                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)       |
 | Media                  | Analyze, generate, or speak media                                             | `image`, `image_generate`, `music_generate`, `video_generate`, `tts` | [Media overview](/tools/media-overview)                                |
 | Large PI catalogs      | Search and call many eligible tools without sending every schema to the model | `tool_search_code`, `tool_search`, `tool_describe`                   | [Tool Search](/tools/tool-search)                                      |
+
+`usage` is the read-only, machine-readable usage tool in the sessions group.
+It reports token totals, message/request counts, provider quota windows, and
+optional chunked deltas for the current or another visible session.
 
 <Note>
 Tool Search is an experimental PI-agent surface. Codex harness runs use

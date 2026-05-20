@@ -284,6 +284,35 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
   };
 };
 
+function formatUsageStatsLines(
+  summary: Awaited<ReturnType<typeof loadCostUsageSummary>>,
+): string[] {
+  const lines = ["📊 Usage tokens"];
+  const daily = summary.daily.filter((entry) => entry.totalTokens > 0).slice(-7);
+  if (daily.length === 0 && summary.totals.totalTokens <= 0) {
+    return [...lines, "No token usage found for the selected window."];
+  }
+  for (const entry of daily) {
+    const partial = entry.missingCostEntries > 0 ? " (partial)" : "";
+    lines.push(
+      `${entry.date}: ${formatTokenCount(entry.totalTokens)} tokens` +
+        ` · in ${formatTokenCount(entry.input)}` +
+        ` / out ${formatTokenCount(entry.output)}` +
+        (entry.cacheRead > 0 || entry.cacheWrite > 0
+          ? ` · cache ${formatTokenCount(entry.cacheRead)} cached / ${formatTokenCount(
+              entry.cacheWrite,
+            )} new`
+          : "") +
+        partial,
+    );
+  }
+  const totalPartial = summary.totals.missingCostEntries > 0 ? " (partial)" : "";
+  lines.push(
+    `Total ${summary.days}d: ${formatTokenCount(summary.totals.totalTokens)} tokens${totalPartial}`,
+  );
+  return lines;
+}
+
 export const handleUsageCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -301,7 +330,16 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
-  if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
+  const normalizedArgs = normalizeLowercaseStringOrEmpty(rawArgs);
+  if (normalizedArgs === "stats") {
+    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    return {
+      shouldContinue: false,
+      reply: { text: formatUsageStatsLines(summary).join("\n") },
+    };
+  }
+
+  if (normalizedArgs.startsWith("cost")) {
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionAgentId = params.sessionKey
       ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -347,7 +385,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   if (rawArgs && !requested) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
+      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost|stats" },
     };
   }
 
