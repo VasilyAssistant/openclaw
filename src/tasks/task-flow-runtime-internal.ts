@@ -15,6 +15,7 @@ export {
   syncFlowFromTask,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
+  updateFlowState,
 } from "./task-flow-registry.js";
 
 export type { TaskFlowSyncResult, TaskFlowUpdateResult } from "./task-flow-registry.js";

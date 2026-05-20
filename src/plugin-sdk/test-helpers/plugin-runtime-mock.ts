@@ -146,6 +146,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     meta: {},
   }) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
   const taskFlow = {
+    features: {
+      updateState: true,
+      runTaskExpectedRevision: true,
+    } as const,
     bindSession: vi.fn(
       createTaskFlowSessionMock,
     ) as unknown as PluginRuntime["tasks"]["managedFlows"]["bindSession"],

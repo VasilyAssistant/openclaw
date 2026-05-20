@@ -77,6 +77,50 @@ describe("runtime TaskFlow", () => {
     expect(created.requesterOrigin?.threadId).toBe("thread:456");
   });
 
+  it("updates managed TaskFlow state with expected revision checks", () => {
+    const runtime = createRuntimeTaskFlow();
+    const taskFlow = runtime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const created = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Track multi-step work",
+      currentStep: "start",
+      stateJson: { step: 1 },
+    });
+    const updated = taskFlow.updateState({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      currentStep: "next",
+      stateJson: { step: 2 },
+    });
+
+    expect(updated).toMatchObject({
+      applied: true,
+      flow: {
+        flowId: created.flowId,
+        currentStep: "next",
+        stateJson: { step: 2 },
+        revision: created.revision + 1,
+      },
+    });
+    const conflicted = taskFlow.updateState({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      stateJson: { step: 3 },
+    });
+
+    expect(conflicted).toMatchObject({
+      applied: false,
+      code: "revision_conflict",
+      current: {
+        flowId: created.flowId,
+        stateJson: { step: 2 },
+      },
+    });
+  });
+
   it("rejects tool contexts without a bound session key", () => {
     const runtime = createRuntimeTaskFlow();
     expect(() =>
@@ -136,5 +180,55 @@ describe("runtime TaskFlow", () => {
     }
     expect(summary.total).toBe(1);
     expect(summary.active).toBe(1);
+  });
+
+  it("runs child tasks only when the expected revision still matches", () => {
+    const runtime = createRuntimeTaskFlow();
+    const taskFlow = runtime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const created = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Protected child spawn",
+    });
+
+    const conflicted = taskFlow.runTask({
+      flowId: created.flowId,
+      expectedRevision: created.revision + 1,
+      runtime: "acp",
+      childSessionKey: "agent:main:subagent:stale",
+      runId: "runtime-taskflow-stale-child",
+      task: "Should not start",
+    });
+
+    expect(conflicted).toMatchObject({
+      created: false,
+      found: true,
+      reason: "Flow revision conflict.",
+      flow: {
+        flowId: created.flowId,
+        revision: created.revision,
+      },
+    });
+    expect(taskFlow.getTaskSummary(created.flowId)).toMatchObject({
+      total: 0,
+    });
+
+    const child = taskFlow.runTask({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      runtime: "acp",
+      childSessionKey: "agent:main:subagent:fresh",
+      runId: "runtime-taskflow-fresh-child",
+      task: "Start now",
+    });
+
+    expect(child).toMatchObject({
+      created: true,
+      task: {
+        runId: "runtime-taskflow-fresh-child",
+        parentFlowId: created.flowId,
+      },
+    });
   });
 });
