@@ -21,12 +21,14 @@ orchestrate sub-agents.
 | `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
 | `subagents`        | List spawned sub-agent status for this session                              |
 | `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
+| `usage`            | Read structured token usage and provider quota deltas                       |
 
 These tools are still subject to the active tool profile and allow/deny
 policy. `tools.profile: "coding"` includes the full session orchestration
 set, including `sessions_spawn`, `sessions_yield`, and `subagents`.
 `tools.profile: "messaging"` includes cross-session messaging tools
-(`sessions_list`, `sessions_history`, `sessions_send`, `session_status`) but
+(`sessions_list`, `sessions_history`, `sessions_send`, `session_status`,
+`usage`) but
 does not include sub-agent spawning. To keep a messaging profile and still
 allow native delegation, add:
 
@@ -119,6 +121,11 @@ sparse token/cache counters from the latest transcript usage entry, and
 `model=default` clears a per-session override. Use `sessionKey="current"` for
 the caller's current session; visible client labels such as `openclaw-tui` are
 not session keys.
+
+`usage` is the machine-readable counterpart for token and quota accounting. It
+returns session totals, message/request counts, provider usage windows, and
+optional chunked deltas for the current or another visible session. It follows
+the same session visibility boundaries as other session read tools.
 
 `sessions_yield` intentionally ends the current turn so the next message can be
 the follow-up event you are waiting for. Use it after spawning sub-agents when

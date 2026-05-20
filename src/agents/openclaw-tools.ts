@@ -55,6 +55,7 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
+import { createUsageTool } from "./tools/usage-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -478,6 +479,12 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
+    }),
+    createUsageTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: resolvedConfig,
+      sandboxed: options?.sandboxed,
+      callGateway: embedded ? effectiveCallGateway : undefined,
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];

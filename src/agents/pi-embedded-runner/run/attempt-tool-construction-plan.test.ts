@@ -186,6 +186,19 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
   });
 
   it("materializes only plugin candidates for plugin-only allowlists", () => {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["usage"] }), {
+      constructTools: true,
+      includeCoreTools: true,
+      runtimeToolAllowlist: ["usage"],
+      coding: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }),
       {
