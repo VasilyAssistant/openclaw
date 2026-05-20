@@ -1585,6 +1585,154 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("streams Telegram command progress when session verbose is on", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "on" },
+    });
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "exec ls ~/Desktop",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      expect.stringMatching(/\n`🛠️ Exec`\n`🛠️ exec ls ~\/Desktop`$/),
+    );
+  });
+
+  it("suppresses Telegram command progress when session verbose is off", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "off" },
+    });
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "exec ls ~/Desktop",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressDefaultToolProgressMessages: true,
+        }),
+      }),
+    );
+  });
+
+  it("suppresses Telegram progress draft labels when session verbose is off", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "off" },
+    });
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "exec ls ~/Desktop",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working..." } } },
+    });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+    expect(answerDraftStream.flush).not.toHaveBeenCalled();
+  });
+
+  it("uses native command target session verbose off for Telegram command progress", async () => {
+    loadSessionStore.mockReturnValue({
+      "agent:main:telegram:slash:telegram-test-user": { verboseLevel: "on" },
+      "agent:main:telegram:direct:telegram-test-user": { verboseLevel: "off" },
+    });
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "exec ls ~/Desktop",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:slash:telegram-test-user",
+          CommandTargetSessionKey: "agent:main:telegram:direct:telegram-test-user",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("streams Telegram command progress when native command target verbose is on", async () => {
+    loadSessionStore.mockReturnValue({
+      "agent:main:telegram:slash:telegram-test-user": { verboseLevel: "off" },
+      "agent:main:telegram:direct:telegram-test-user": { verboseLevel: "on" },
+    });
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "exec ls ~/Desktop",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:slash:telegram-test-user",
+          CommandTargetSessionKey: "agent:main:telegram:direct:telegram-test-user",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      expect.stringMatching(/\n`🛠️ Exec`\n`🛠️ exec ls ~\/Desktop`$/),
+    );
+  });
+
   it("does not coalesce answer partial fragments with tool progress drafts", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(

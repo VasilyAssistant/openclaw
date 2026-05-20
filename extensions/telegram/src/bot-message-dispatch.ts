@@ -246,6 +246,7 @@ type DispatchTelegramMessageParams = {
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
+type TelegramVerboseLevel = "off" | "on" | "full";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
 type TelegramSessionStore = ReturnType<typeof loadSessionStore>;
@@ -382,6 +383,72 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     message: appendedMessage,
     messageId,
   });
+}
+
+function normalizeTelegramSessionKey(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeTelegramVerboseLevel(raw: unknown): TelegramVerboseLevel | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const key = raw.trim().toLowerCase();
+  if (!key) {
+    return undefined;
+  }
+  if (["off", "false", "no", "0"].includes(key)) {
+    return "off";
+  }
+  if (["full", "all", "everything"].includes(key)) {
+    return "full";
+  }
+  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
+    return "on";
+  }
+  return undefined;
+}
+
+function resolveTelegramVerboseSessionKeys(ctxPayload: {
+  SessionKey?: unknown;
+  CommandTargetSessionKey?: unknown;
+  CommandSource?: unknown;
+}): string[] {
+  const sessionKey = normalizeTelegramSessionKey(ctxPayload.SessionKey);
+  const commandTargetSessionKey = normalizeTelegramSessionKey(ctxPayload.CommandTargetSessionKey);
+  const ordered =
+    ctxPayload.CommandSource === "native" ? [commandTargetSessionKey, sessionKey] : [sessionKey];
+  return ordered.filter((key, index): key is string =>
+    Boolean(key && ordered.indexOf(key) === index),
+  );
+}
+
+function resolveTelegramVerboseLevel(params: {
+  cfg: OpenClawConfig;
+  sessionKeys: readonly string[];
+  agentId: string;
+  telegramDeps: TelegramBotDeps;
+}): TelegramVerboseLevel | undefined {
+  const { cfg, sessionKeys, agentId, telegramDeps } = params;
+  if (sessionKeys.length === 0) {
+    return undefined;
+  }
+  try {
+    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
+    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+      skipCache: true,
+    });
+    for (const sessionKey of sessionKeys) {
+      const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const level = normalizeTelegramVerboseLevel(entry?.verboseLevel);
+      if (level) {
+        return level;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
@@ -797,6 +864,12 @@ export const dispatchTelegramMessage = async ({
     agentId: route.agentId,
     loadFreshSessionStore,
   });
+  const resolvedVerboseLevel = resolveTelegramVerboseLevel({
+    cfg,
+    sessionKeys: resolveTelegramVerboseSessionKeys(ctxPayload),
+    agentId: route.agentId,
+    telegramDeps,
+  });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const streamDeliveryEnabled = !isRoomEvent && streamMode !== "off";
@@ -897,8 +970,11 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const sessionVerboseOff = resolvedVerboseLevel === "off";
   const streamToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+    Boolean(answerLane.stream) &&
+    resolveChannelStreamingPreviewToolProgress(telegramCfg) &&
+    !sessionVerboseOff;
   const nativeToolProgressDraft =
     streamToolProgressEnabled &&
     !isRoomEvent &&
@@ -932,7 +1008,7 @@ export const dispatchTelegramMessage = async ({
     activeAnswerDraftIsToolProgressOnly = true;
   }
   const renderProgressDraft = async (options?: { flush?: boolean }): Promise<boolean> => {
-    if (!answerLane.stream || streamMode !== "progress") {
+    if (!answerLane.stream || streamMode !== "progress" || sessionVerboseOff) {
       return false;
     }
     const streamText = formatChannelProgressDraftText({
@@ -972,6 +1048,9 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
+      return false;
+    }
+    if (sessionVerboseOff) {
       return false;
     }
     const rawText = typeof line === "string" ? line : line?.text;
@@ -1956,7 +2035,7 @@ export const dispatchTelegramMessage = async ({
                         })
                     : undefined,
                   suppressDefaultToolProgressMessages:
-                    !streamDeliveryEnabled || Boolean(answerLane.stream),
+                    !streamDeliveryEnabled || Boolean(answerLane.stream) || sessionVerboseOff,
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
                     !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
