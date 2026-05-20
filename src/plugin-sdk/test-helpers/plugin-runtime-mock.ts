@@ -140,6 +140,10 @@ export function createPluginRuntimeMediaMock(
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const taskFlow = {
+    features: {
+      updateState: true,
+      runTaskExpectedRevision: true,
+    } as const,
     bindSession: vi.fn(
       createTaskFlowSessionMock,
     ) as unknown as PluginRuntime["tasks"]["managedFlows"]["bindSession"],
