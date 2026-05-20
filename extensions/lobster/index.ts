@@ -1,6 +1,7 @@
 // Lobster plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolFactory } from "./runtime-api.js";
+import { createLobsterManagedWorkflowTool } from "./src/lobster-managed-workflow-tool.js";
 import { createLobsterTool } from "./src/lobster-tool.js";
 
 export default definePluginEntry({
@@ -20,6 +21,10 @@ export default definePluginEntry({
         return createLobsterTool(api, { taskFlow }) as AnyAgentTool;
       }) as OpenClawPluginToolFactory,
       { optional: true },
+    );
+    api.registerTool(
+      ((ctx) => createLobsterManagedWorkflowTool(api, ctx)) as OpenClawPluginToolFactory,
+      { name: "lobster_managed_workflow", optional: true },
     );
   },
 });

@@ -18,6 +18,11 @@ Lobster executes multi-step workflows with approval checkpoints. Use it when:
 
 ## Basic usage
 
+Use `lobster_managed_workflow` instead of raw `lobster` when the host has
+configured a named managed workflow for sandboxed/chat agents. The host-owned
+workflow config supplies the pipeline; pass `workflowId`, `argsJson`, and a
+stable `idempotencyKey`.
+
 ### Run a pipeline
 
 ```json

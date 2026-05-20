@@ -38,42 +38,53 @@ Enable it in an agent allowlist:
 }
 ```
 
-## Using `openclaw.invoke` (Lobster → OpenClaw tools)
+## Managed Workflow Bridge
 
-Some Lobster pipelines may include a `openclaw.invoke` step to call back into OpenClaw tools/plugins (for example: `gog` for Google Workspace, `gh` for GitHub, `message.send`, etc.).
+`lobster_managed_workflow` is a narrower optional tool for sandboxed agents. It
+does not accept arbitrary pipelines from the model. The host config owns named
+workflows under `plugins.entries.lobster.config.managedWorkflows`, and the agent
+passes only `workflowId`, `argsJson`, and an `idempotencyKey`.
 
-For this to work, the OpenClaw Gateway must expose the tool bridge endpoint and the target tool must be allowed by policy:
-
-- OpenClaw provides an HTTP endpoint: `POST /tools/invoke`.
-- The request is gated by **gateway auth** (e.g. `Authorization: Bearer …` when token auth is enabled).
-- The invoked tool is gated by **tool policy** (global + per-agent + provider + group policy). If the tool is not allowed, OpenClaw returns `404 Tool not available`.
-
-### Allowlisting recommended
-
-To avoid letting workflows call arbitrary tools, set a tight allowlist on the agent that will be used by `openclaw.invoke`.
-
-Example (allow only a small set of tools):
+Example config:
 
 ```jsonc
 {
-  "agents": {
-    "list": [
-      {
-        "id": "main",
-        "tools": {
-          "allow": ["lobster", "web_fetch", "web_search", "gog", "gh"],
-          "deny": ["gateway"],
-        },
-      },
-    ],
+  "plugins": {
+    "entries": {
+      "lobster": {
+        "enabled": true,
+        "config": {
+          "managedWorkflows": {
+            "task/create-after-approval": {
+              "pipeline": "tasks.preview | approve --prompt 'Create task?' | tasks.create",
+              "goal": "Create a task after approval",
+              "allowSandboxed": true,
+              "approvalMode": "plugin-inline",
+              "approvalTimeoutMs": 600000
+            }
+          }
+        }
+      }
+    }
   },
+  "tools": {
+    "allow": ["lobster_managed_workflow"]
+  }
 }
 ```
 
-Notes:
+With `approvalMode: "plugin-inline"`, the tool stores the TaskFlow wait state,
+requests a normal plugin approval, waits for the decision, then resumes the
+Lobster approval with the Lobster `approvalId` or resume token. Side effects
+must stay after the Lobster `approve` step.
 
-- If `tools.allow` is omitted or empty, it behaves like "allow everything (except denied)". For a real allowlist, set a **non-empty** `allow`.
-- Tool names depend on which plugins you have installed/enabled.
+## Embedded Runner Limitation
+
+The bundled Lobster plugin uses the embedded in-process runner. In that mode,
+`openclaw.invoke` steps do not automatically inherit a Gateway URL/auth context
+for nested OpenClaw tool calls. Managed workflows should use steps that are
+valid in the embedded runtime, or a host-owned side-effect adapter that does not
+depend on nested `openclaw.invoke`, until the embedded tool bridge is supported.
 
 ## Security
 

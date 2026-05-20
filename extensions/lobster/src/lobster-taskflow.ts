@@ -19,6 +19,11 @@ type BoundTaskFlow = ReturnType<
 type FlowRecord = NonNullable<ReturnType<BoundTaskFlow["tryCreateManaged"]>>;
 type MutationResult = ReturnType<BoundTaskFlow["setWaiting"]>;
 
+type BeforeFinalizeResult = {
+  sideEffect?: JsonLike;
+  flow?: FlowRecord;
+};
+
 type LobsterApprovalWaitState = {
   kind: "lobster_approval";
   prompt: string;
@@ -49,14 +54,20 @@ type ResumeManagedLobsterFlowParams = {
   expectedRevision: number;
   currentStep?: string;
   waitingStep?: string;
+  beforeFinalize?: (params: {
+    flow: FlowRecord;
+    envelope: LobsterEnvelope;
+    expectedRevision: number;
+  }) => BeforeFinalizeResult | undefined | Promise<BeforeFinalizeResult | undefined>;
 };
 
 export type ManagedLobsterFlowResult =
   | {
       ok: true;
-      envelope: LobsterEnvelope;
+      envelope: Extract<LobsterEnvelope, { ok: true }>;
       flow: FlowRecord;
       mutation: MutationResult;
+      sideEffect?: JsonLike;
     }
   | {
       ok: false;
@@ -245,16 +256,23 @@ export async function resumeManagedLobsterFlow(
 
   try {
     const envelope = await params.runner.run(params.runnerParams);
+    const beforeFinalize = await params.beforeFinalize?.({
+      flow: resumed.flow,
+      envelope,
+      expectedRevision: resumed.flow.revision,
+    });
+    const flowForFinalize = beforeFinalize?.flow ?? resumed.flow;
     const mutation = applyEnvelopeToFlow({
       taskFlow: params.taskFlow,
-      flow: resumed.flow,
+      flow: flowForFinalize,
       envelope,
       waitingStep: params.waitingStep ?? "await_lobster_approval",
     });
+    const resultFlow = mutation.applied ? mutation.flow : flowForFinalize;
     if (!envelope.ok) {
       return {
         ok: false,
-        flow: resumed.flow,
+        flow: resultFlow,
         mutation,
         error: buildEnvelopeError(envelope),
       };
@@ -262,8 +280,9 @@ export async function resumeManagedLobsterFlow(
     return {
       ok: true,
       envelope,
-      flow: resumed.flow,
+      flow: resultFlow,
       mutation,
+      ...(beforeFinalize?.sideEffect !== undefined ? { sideEffect: beforeFinalize.sideEffect } : {}),
     };
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));

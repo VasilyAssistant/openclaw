@@ -6,16 +6,145 @@
   "name": "Lobster",
   "description": "Lobster workflow tool plugin for typed pipelines and resumable approvals.",
   "contracts": {
-    "tools": ["lobster"]
+    "tools": ["lobster", "lobster_managed_workflow"]
   },
   "toolMetadata": {
     "lobster": {
+      "optional": true
+    },
+    "lobster_managed_workflow": {
       "optional": true
     }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "managedWorkflows": {
+        "type": "object",
+        "description": "Host-owned named Lobster workflows exposed through the narrow managed TaskFlow bridge.",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pipeline", "goal"],
+          "properties": {
+            "pipeline": {
+              "type": "string",
+              "description": "Lobster pipeline string owned by host configuration."
+            },
+            "goal": {
+              "type": "string",
+              "description": "TaskFlow goal for runs of this workflow."
+            },
+            "controllerId": {
+              "type": "string",
+              "description": "TaskFlow controller id. Defaults to lobster/<workflowId>."
+            },
+            "allowSandboxed": {
+              "type": "boolean",
+              "description": "Allow sandboxed agent sessions to run this named workflow."
+            },
+            "approvalMode": {
+              "type": "string",
+              "enum": ["taskflow", "plugin-inline"],
+              "description": "Use taskflow to leave Lobster approvals in waitJson, or plugin-inline to request plugin approval and resume in the same tool call."
+            },
+            "onApproved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["taskTemplate"],
+              "description": "Optional trusted side effect after inline approval and successful Lobster resume.",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["runTask"]
+                },
+                "runtime": {
+                  "type": "string",
+                  "enum": ["subagent", "acp", "cli", "cron"]
+                },
+                "taskTemplate": {
+                  "type": "string"
+                },
+                "labelTemplate": {
+                  "type": "string"
+                },
+                "sourceIdTemplate": {
+                  "type": "string"
+                },
+                "childSessionKeyTemplate": {
+                  "type": "string"
+                },
+                "agentIdTemplate": {
+                  "type": "string"
+                },
+                "runIdTemplate": {
+                  "type": "string"
+                },
+                "progressSummaryTemplate": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["queued", "running"]
+                },
+                "notifyPolicy": {
+                  "type": "string",
+                  "enum": ["done_only", "state_changes", "silent"]
+                },
+                "deliveryStatus": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "delivered",
+                    "session_queued",
+                    "failed",
+                    "parent_missing",
+                    "not_applicable"
+                  ]
+                },
+                "preferMetadata": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxStdoutBytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "approvalTimeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600000,
+              "description": "Inline plugin approval timeout. Defaults to 120000ms and is capped at 600000ms."
+            },
+            "currentStep": {
+              "type": "string"
+            },
+            "waitingStep": {
+              "type": "string"
+            },
+            "resumeStep": {
+              "type": "string"
+            },
+            "requireIdempotency": {
+              "type": "boolean",
+              "description": "Require idempotencyKey on run calls. Defaults to true."
+            },
+            "idempotencyTtlMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    }
   }
 }
