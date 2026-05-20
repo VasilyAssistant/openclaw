@@ -16,7 +16,7 @@ export function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTas
     goal: "Run Lobster workflow",
   };
 
-  return {
+  const fake: BoundTaskFlow = {
     sessionKey: "agent:main:main",
     createManaged: vi.fn().mockReturnValue(baseFlow),
     get: vi.fn(),
@@ -36,6 +36,10 @@ export function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTas
       applied: true,
       flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "completed" as const },
     })),
+    updateState: vi.fn().mockImplementation((input) => ({
+      applied: true,
+      flow: { ...baseFlow, revision: input.expectedRevision + 1 },
+    })),
     fail: vi.fn().mockImplementation((input) => ({
       applied: true,
       flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "failed" as const },
@@ -43,6 +47,6 @@ export function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTas
     requestCancel: vi.fn(),
     cancel: vi.fn(),
     runTask: vi.fn(),
-    ...overrides,
   };
+  return overrides ? Object.assign(fake, overrides) : fake;
 }
