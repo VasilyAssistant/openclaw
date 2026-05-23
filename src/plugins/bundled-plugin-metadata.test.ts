@@ -50,6 +50,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "phone-control",
   "policy",
   "talk-voice",
+  "taskflow-tools",
   "thread-ownership",
   "voice-call",
   "webhooks",

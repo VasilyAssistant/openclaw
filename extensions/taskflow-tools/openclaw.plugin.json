@@ -1,0 +1,51 @@
+{
+  "id": "taskflow-tools",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "TaskFlow Tools",
+  "description": "Trusted minimal TaskFlow tools for managed flows and approval-gated schedules.",
+  "contracts": {
+    "tools": [
+      "taskflow_create_managed",
+      "taskflow_list_own",
+      "taskflow_get_own",
+      "taskflow_request_cancel",
+      "taskflow_request_schedule"
+    ]
+  },
+  "toolMetadata": {
+    "taskflow_create_managed": { "optional": true },
+    "taskflow_list_own": { "optional": true },
+    "taskflow_get_own": { "optional": true },
+    "taskflow_request_cancel": { "optional": true },
+    "taskflow_request_schedule": { "optional": true }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "requireCreateApproval": {
+        "type": "boolean",
+        "description": "Require inline plugin approval before creating a managed TaskFlow. Defaults to true."
+      },
+      "requireCancelApproval": {
+        "type": "boolean",
+        "description": "Require inline plugin approval before requesting TaskFlow cancellation. Defaults to true."
+      },
+      "requireScheduleApproval": {
+        "type": "boolean",
+        "description": "Require inline plugin approval before creating Gateway cron schedules. Defaults to true."
+      },
+      "defaultTimezone": {
+        "type": "string",
+        "description": "Timezone used when a recurring schedule omits timezone."
+      },
+      "allowedRecipientChannels": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional allowlist for schedule delivery channels."
+      }
+    }
+  }
+}
