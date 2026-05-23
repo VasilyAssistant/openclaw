@@ -48,6 +48,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "phone-control",
   "skill-workshop",
   "talk-voice",
+  "taskflow-tools",
   "thread-ownership",
   "voice-call",
   "webhooks",
