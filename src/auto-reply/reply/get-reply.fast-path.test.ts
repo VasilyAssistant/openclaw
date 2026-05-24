@@ -12,6 +12,7 @@ import {
   initFastReplySessionState,
   markCompleteReplyConfig,
   withFastReplyConfig,
+  withFullRuntimeReplyConfig,
 } from "./get-reply-fast-path.js";
 import {
   buildGetReplyCtx,
@@ -534,6 +535,47 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.sessionKey).toBe("agent:main:main");
     expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
+  });
+
+  it("uses persisted spawned workspace for focused spawned sessions", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-spawned-workspace-"));
+    const agentWorkspace = path.join(home, "agent-workspace");
+    const spawnedWorkspace = path.join(home, "task-workspace");
+    const sessionKey = "agent:ops:subagent:task:docs-refresh-pr-2026-05-23";
+    const cfg = withFullRuntimeReplyConfig({
+      agents: {
+        defaults: {
+          workspace: agentWorkspace,
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+
+    mocks.ensureAgentWorkspace.mockImplementation(async (params: { dir: string }) => ({
+      dir: params.dir,
+    }));
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        sessionCtx: buildGetReplyCtx({ SessionKey: sessionKey }),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:telegram:123",
+          spawnedWorkspaceDir: spawnedWorkspace,
+        },
+        sessionKey,
+        triggerBodyNormalized: "hello",
+        bodyStripped: "hello",
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx({ SessionKey: sessionKey }), undefined, cfg),
+    ).resolves.toEqual({ text: "ok" });
+
+    const directiveParams = requireDirectiveParams();
+    expect(directiveParams.workspaceDir).toBe(spawnedWorkspace);
   });
 
   it("maps explicit gateway origin into command context", () => {
