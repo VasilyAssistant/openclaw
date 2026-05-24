@@ -8,6 +8,7 @@ import {
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import { modelKey, resolveModelRefFromString } from "../../agents/model-selection.js";
+import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -297,8 +298,10 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspaceDirForNativeCommand = workspaceDirRaw;
+  const agentWorkspaceDirRaw =
+    resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  let workspaceDirRaw = agentWorkspaceDirRaw;
+  const workspaceDirForNativeCommand = agentWorkspaceDirRaw;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -339,50 +342,21 @@ export async function getReplyFromConfig(
     return nativeSlashCommandFastReply.reply;
   }
 
-  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-    useFastTestBootstrap
-      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-      : await ensureAgentWorkspace({
-          dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-        }),
-  );
-  const workspaceDir = workspace.dir;
-
-  if (!isFastTestEnv && hasInboundMedia(finalized)) {
-    await traceGetReplyPhase("reply.apply_media_understanding", () =>
-      applyMediaUnderstandingIfNeeded({
-        ctx: finalized,
-        cfg,
-        agentDir,
-        workspaceDir,
-        activeModel: { provider, model },
-      }),
-    );
-  }
-  if (!isFastTestEnv && hasLinkCandidate(finalized)) {
-    await traceGetReplyPhase("reply.apply_link_understanding", () =>
-      applyLinkUnderstandingIfNeeded({
-        ctx: finalized,
-        cfg,
-      }),
-    );
-  }
-  emitPreAgentMessageHooks({
-    ctx: finalized,
-    cfg,
-    isFastTestEnv,
-  });
-
   const commandAuthorized = finalized.CommandAuthorized;
+  let fastBootstrapWorkspaceDir: string | undefined;
+  if (useFastTestBootstrap) {
+    await traceGetReplyPhase("reply.ensure_workspace", async () => {
+      await fs.mkdir(workspaceDirRaw, { recursive: true });
+      fastBootstrapWorkspaceDir = workspaceDirRaw;
+    });
+  }
   const sessionState = useFastTestBootstrap
     ? initFastReplySessionState({
         ctx: finalized,
         cfg,
         agentId,
         commandAuthorized,
-        workspaceDir,
+        workspaceDir: fastBootstrapWorkspaceDir ?? workspaceDirRaw,
       })
     : await traceGetReplyPhase("reply.init_session_state", () =>
         initSessionState({
@@ -409,6 +383,48 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  const spawnedWorkspaceDirRaw = resolveIngressWorkspaceOverrideForSpawnedRun({
+    spawnedBy: sessionEntry?.spawnedBy,
+    workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+  });
+  workspaceDirRaw = spawnedWorkspaceDirRaw ?? workspaceDirRaw;
+  const workspaceDir =
+    fastBootstrapWorkspaceDir ??
+    (
+      await traceGetReplyPhase("reply.ensure_workspace", () =>
+        ensureAgentWorkspace({
+          dir: workspaceDirRaw,
+          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        }),
+      )
+    ).dir;
+
+  if (!isFastTestEnv && hasInboundMedia(finalized)) {
+    await traceGetReplyPhase("reply.apply_media_understanding", () =>
+      applyMediaUnderstandingIfNeeded({
+        ctx: finalized,
+        cfg,
+        agentDir,
+        workspaceDir,
+        activeModel: { provider, model },
+      }),
+    );
+  }
+  if (!isFastTestEnv && hasLinkCandidate(finalized)) {
+    await traceGetReplyPhase("reply.apply_link_understanding", () =>
+      applyLinkUnderstandingIfNeeded({
+        ctx: finalized,
+        cfg,
+      }),
+    );
+  }
+  emitPreAgentMessageHooks({
+    ctx: finalized,
+    cfg,
+    isFastTestEnv,
+  });
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
