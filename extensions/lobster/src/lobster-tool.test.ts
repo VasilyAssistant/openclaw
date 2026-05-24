@@ -58,6 +58,34 @@ class MemoryStore<T> {
   }
 }
 
+function linkedFlow(revision = 4) {
+  return {
+    flowId: "flow-1",
+    revision,
+    syncMode: "managed" as const,
+    controllerId: "tests/lobster",
+    ownerKey: "agent:main:main",
+    status: "running" as const,
+    goal: "Run Lobster workflow",
+  };
+}
+
+function linkedSpawnResult(runId: string) {
+  return {
+    ok: true,
+    toolName: "sessions_spawn",
+    source: "core",
+    output: {
+      details: {
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:child",
+        runId,
+        mode: "run",
+      },
+    },
+  };
+}
+
 describe("lobster plugin tool", () => {
   it("returns the Lobster envelope in details", async () => {
     const runner = {
@@ -517,6 +545,14 @@ describe("lobster managed workflow tool", () => {
       controllerId: "lobster/task/create",
       goal: "Create a task after approval",
       currentStep: "run_lobster",
+      stateJson: {
+        lobsterManagedWorkflow: {
+          workflowId: "task/create",
+          idempotencyKey: "telegram:1",
+          argsJson: '{"title":"Call client"}',
+          createdAtMs: expect.any(Number),
+        },
+      },
     });
     expect(runner.run).toHaveBeenCalledWith({
       action: "run",
@@ -572,42 +608,16 @@ describe("lobster managed workflow tool", () => {
           requiresApproval: null,
         }),
     };
-    const taskFlow = createFakeTaskFlow({
-      runTask: vi.fn().mockImplementation((input: Record<string, unknown>) => ({
-        created: true,
-        flow: {
-          flowId: "flow-1",
-          revision: 4,
-          syncMode: "managed" as const,
-          controllerId: "tests/lobster",
-          ownerKey: "agent:main:main",
-          status: "running" as const,
-          goal: "Run Lobster workflow",
-        },
-        task: {
-          taskId: "task-1",
-          runtime: input.runtime,
-          sourceId: input.sourceId,
-          requesterSessionKey: "agent:main:main",
-          ownerKey: "agent:main:main",
-          scopeKind: "session" as const,
-          parentFlowId: input.flowId,
-          runId: input.runId,
-          label: input.label,
-          task: input.task,
-          status: input.status ?? "queued",
-          deliveryStatus: input.deliveryStatus ?? "pending",
-          notifyPolicy: input.notifyPolicy ?? "done_only",
-          createdAt: 1,
-        },
-      })),
-    });
+    const taskFlow = createFakeTaskFlow({ get: vi.fn().mockReturnValue(linkedFlow()) });
     const callGatewayTool = vi.fn(async (method: string) => {
       if (method === "plugin.approval.request") {
         return { id: "plugin-approval-1" };
       }
       if (method === "plugin.approval.waitDecision") {
         return { id: "plugin-approval-1", decision: "allow-once" };
+      }
+      if (method === "tools.invoke") {
+        return linkedSpawnResult("linked-run-1");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -667,17 +677,26 @@ describe("lobster managed workflow tool", () => {
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
     });
-    expect(taskFlow.runTask).toHaveBeenCalledWith({
-      flowId: "flow-1",
-      expectedRevision: 3,
-      runtime: "subagent",
-      task: "Create task: Call client",
-      status: "queued",
-      label: "Call client",
-      sourceId: "source:telegram:1",
-      runId: "run:telegram:1",
-      notifyPolicy: "state_changes",
-    });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "tools.invoke",
+      { timeoutMs: 300_000 },
+      {
+        name: "sessions_spawn",
+        sessionKey: "main",
+        idempotencyKey: "lobster:task/create:telegram:1:sessions_spawn",
+        args: {
+          task: "Create task: Call client",
+          runtime: "subagent",
+          label: "Call client",
+          flowLink: {
+            flowId: "flow-1",
+            expectedRevision: 3,
+            idempotencyKey: "telegram:1",
+            controllerId: "task/create",
+          },
+        },
+      },
+    );
     expect(taskFlow.finish).toHaveBeenCalledWith({
       flowId: "flow-1",
       expectedRevision: 4,
@@ -690,8 +709,10 @@ describe("lobster managed workflow tool", () => {
     expect(approval.status).toBe("approved");
     const sideEffect = requireRecord(details.sideEffect, "approved workflow side effect");
     expect(sideEffect.type).toBe("runTask");
+    expect(sideEffect.mode).toBe("linked_subagent_spawn");
     const task = requireRecord(sideEffect.task, "approved child task");
-    expect(task.taskId).toBe("task-1");
+    expect(task.childSessionKey).toBe("agent:main:subagent:child");
+    expect(task.runId).toBe("linked-run-1");
     expect(task.parentFlowId).toBe("flow-1");
   });
 
@@ -704,35 +725,12 @@ describe("lobster managed workflow tool", () => {
         requiresApproval: null,
       }),
     };
-    const taskFlow = createFakeTaskFlow({
-      runTask: vi.fn().mockImplementation((input: Record<string, unknown>) => ({
-        created: true,
-        flow: {
-          flowId: "flow-1",
-          revision: 4,
-          syncMode: "managed" as const,
-          controllerId: "tests/lobster",
-          ownerKey: "agent:main:main",
-          status: "running" as const,
-          goal: "Run Lobster workflow",
-        },
-        task: {
-          taskId: "task-1",
-          runtime: input.runtime,
-          sourceId: input.sourceId,
-          requesterSessionKey: "agent:main:main",
-          ownerKey: "agent:main:main",
-          scopeKind: "session" as const,
-          parentFlowId: input.flowId,
-          runId: input.runId,
-          label: input.label,
-          task: input.task,
-          status: input.status ?? "queued",
-          deliveryStatus: input.deliveryStatus ?? "pending",
-          notifyPolicy: input.notifyPolicy ?? "done_only",
-          createdAt: 1,
-        },
-      })),
+    const taskFlow = createFakeTaskFlow({ get: vi.fn().mockReturnValue(linkedFlow()) });
+    const callGatewayTool = vi.fn(async (method: string) => {
+      if (method === "tools.invoke") {
+        return linkedSpawnResult("linked-run-manual");
+      }
+      throw new Error(`unexpected method: ${method}`);
     });
     const tool = createLobsterManagedWorkflowTool(
       managedApi({
@@ -751,6 +749,7 @@ describe("lobster managed workflow tool", () => {
       {
         runner,
         taskFlow,
+        callGatewayTool,
         idempotencyStore: new MemoryStore<any>(),
       },
     );
@@ -775,17 +774,26 @@ describe("lobster managed workflow tool", () => {
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
     });
-    expect(taskFlow.runTask).toHaveBeenCalledWith({
-      flowId: "flow-1",
-      expectedRevision: 3,
-      runtime: "subagent",
-      task: "Create task: Call client\nBring agenda",
-      status: "queued",
-      label: "Call client",
-      sourceId: "source:telegram:manual",
-      runId: "run:telegram:manual",
-      notifyPolicy: "state_changes",
-    });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "tools.invoke",
+      { timeoutMs: 300_000 },
+      {
+        name: "sessions_spawn",
+        sessionKey: "main",
+        idempotencyKey: "lobster:task/create:telegram:manual:sessions_spawn",
+        args: {
+          task: "Create task: Call client\nBring agenda",
+          runtime: "subagent",
+          label: "Call client",
+          flowLink: {
+            flowId: "flow-1",
+            expectedRevision: 3,
+            idempotencyKey: "telegram:manual",
+            controllerId: "task/create",
+          },
+        },
+      },
+    );
     expect(taskFlow.finish).toHaveBeenCalledWith({
       flowId: "flow-1",
       expectedRevision: 4,
@@ -794,8 +802,116 @@ describe("lobster managed workflow tool", () => {
     expect(details.status).toBe("ok");
     const sideEffect = requireRecord(details.sideEffect, "manual resume side effect");
     expect(sideEffect.type).toBe("runTask");
+    expect(sideEffect.mode).toBe("linked_subagent_spawn");
     const task = requireRecord(sideEffect.task, "manual resume child task");
-    expect(task.taskId).toBe("task-1");
+    expect(task.childSessionKey).toBe("agent:main:subagent:child");
+    expect(task.runId).toBe("linked-run-manual");
+    expect(task.parentFlowId).toBe("flow-1");
+  });
+
+  it("uses stored args and idempotency when a managed workflow is manually resumed", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [{ id: "task-1" }],
+        requiresApproval: null,
+      }),
+    };
+    const storedFlow = {
+      flowId: "flow-1",
+      revision: 2,
+      syncMode: "managed" as const,
+      controllerId: "tests/lobster",
+      ownerKey: "agent:main:main",
+      status: "waiting" as const,
+      goal: "Run Lobster workflow",
+      stateJson: {
+        lobsterManagedWorkflow: {
+          workflowId: "task/create",
+          idempotencyKey: "telegram:stored",
+          argsJson: '{"title":"Call client","description":"Bring agenda"}',
+          args: { title: "Call client", description: "Bring agenda" },
+          createdAtMs: 1,
+        },
+      },
+    };
+    const taskFlow = createFakeTaskFlow({
+      get: vi.fn().mockReturnValueOnce(storedFlow).mockReturnValue(linkedFlow()),
+    });
+    const callGatewayTool = vi.fn(async (method: string) => {
+      if (method === "tools.invoke") {
+        return linkedSpawnResult("linked-run-stored");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const tool = createLobsterManagedWorkflowTool(
+      managedApi({
+        approvalMode: "plugin-inline",
+        onApproved: {
+          type: "runTask",
+          runtime: "subagent",
+          taskTemplate: "Create task: {{title}}\n{{description}}",
+          labelTemplate: "{{title}}",
+          sourceIdTemplate: "source:{{idempotencyKey}}",
+          runIdTemplate: "run:{{idempotencyKey}}",
+          notifyPolicy: "state_changes",
+        },
+      }),
+      fakeCtx({ sandboxed: true }),
+      {
+        runner,
+        taskFlow,
+        callGatewayTool,
+        idempotencyStore: new MemoryStore<any>(),
+      },
+    );
+
+    const res = await tool?.execute("call-managed-workflow-manual-resume-stored", {
+      action: "resume",
+      workflowId: "task/create",
+      flowId: "flow-1",
+      flowExpectedRevision: 2,
+      approvalId: "lobster-approval-1",
+      approve: true,
+    });
+
+    expect(taskFlow.get).toHaveBeenCalledWith("flow-1");
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "resume",
+      approvalId: "lobster-approval-1",
+      approve: true,
+      argsJson: '{"title":"Call client","description":"Bring agenda"}',
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "tools.invoke",
+      { timeoutMs: 300_000 },
+      {
+        name: "sessions_spawn",
+        sessionKey: "main",
+        idempotencyKey: "lobster:task/create:telegram:stored:sessions_spawn",
+        args: {
+          task: "Create task: Call client\nBring agenda",
+          runtime: "subagent",
+          label: "Call client",
+          flowLink: {
+            flowId: "flow-1",
+            expectedRevision: 3,
+            idempotencyKey: "telegram:stored",
+            controllerId: "task/create",
+          },
+        },
+      },
+    );
+    const details = requireRecord(res?.details, "stored manual resume details");
+    expect(details.status).toBe("ok");
+    const sideEffect = requireRecord(details.sideEffect, "stored manual resume side effect");
+    const task = requireRecord(sideEffect.task, "stored manual resume child task");
+    expect(task.childSessionKey).toBe("agent:main:subagent:child");
+    expect(task.runId).toBe("linked-run-stored");
     expect(task.parentFlowId).toBe("flow-1");
   });
 
