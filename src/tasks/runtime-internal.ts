@@ -26,5 +26,6 @@ export {
   setTaskRegistryDeliveryRuntimeForTests,
   setTaskCleanupAfterById,
   setTaskRunDeliveryStatusByRunId,
+  updateTaskRunLinkById,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
