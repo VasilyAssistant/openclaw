@@ -626,6 +626,39 @@ describe("exec approvals", () => {
     expect(runCwd).toBeUndefined();
   });
 
+  it("does not warn when gateway exec inherits a sandbox container cwd", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "always", askFallback: "full" },
+      agents: { main: {} },
+    });
+    mockPendingApprovalRegistration();
+
+    const workspaceDir = path.join(process.env.HOME ?? tempRoot, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      security: "full",
+      cwd: "/workspace",
+      sandbox: {
+        containerName: "sandbox-1",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+      },
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-gateway-inherited-sandbox-cwd", {
+      command: `${JSON.stringify(process.execPath)} --version`,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    const pendingText = getResultText(result);
+    expect(pendingText).not.toContain("Warning: workdir");
+    expect(pendingText).toContain(`CWD: ${process.cwd()}`);
+  });
+
   it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {
     const calls: string[] = [];
 

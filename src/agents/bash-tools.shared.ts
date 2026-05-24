@@ -179,6 +179,18 @@ function normalizeContainerPath(input: string): string {
   return path.posix.normalize(normalized);
 }
 
+export function isContainerWorkspaceWorkdir(params: {
+  workdir: string;
+  containerWorkdir?: string | null;
+}) {
+  const containerRoot = normalizeContainerPath(params.containerWorkdir ?? "");
+  if (containerRoot === "." || containerRoot === "/") {
+    return false;
+  }
+  const workdir = normalizeContainerPath(params.workdir);
+  return workdir === containerRoot || workdir.startsWith(`${containerRoot}/`);
+}
+
 /** Resolves a host workdir, falling back to a safe cwd/home path with a warning. */
 export function resolveWorkdir(workdir: string, warnings: string[]) {
   const current = safeCwd();
