@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import {
@@ -194,6 +195,16 @@ function createSessionsSpawnToolSchema(params: {
         description: 'Light bootstrap context; runtime="subagent" only.',
       }),
     ),
+    flowLink: Type.Optional(
+      Type.Object({
+        flowId: Type.String(),
+        expectedRevision: Type.Optional(Type.Number()),
+        taskName: Type.Optional(Type.String()),
+        idempotencyKey: Type.String(),
+        projectKey: Type.Optional(Type.String()),
+        controllerId: Type.Optional(Type.String()),
+      }),
+    ),
 
     // Inline attachments (snapshot-by-value).
     attachments: Type.Optional(
@@ -230,6 +241,79 @@ function createSessionsSpawnToolSchema(params: {
       : {}),
   };
   return Type.Object(schema);
+}
+
+type SessionsSpawnFlowLink = {
+  flowId: string;
+  expectedRevision?: number;
+  taskName?: string;
+  idempotencyKey: string;
+  projectKey?: string;
+  controllerId?: string;
+  idempotencyPayloadHash: string;
+};
+
+function normalizeStableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeStableJsonValue(item));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return Object.fromEntries(
+    entries.map(([key, entryValue]) => [key, normalizeStableJsonValue(entryValue)]),
+  );
+}
+
+function hashLinkedSpawnPayload(value: unknown): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(normalizeStableJsonValue(value)))
+    .digest("hex");
+}
+
+function readFlowLinkParam(
+  params: Record<string, unknown>,
+  taskName?: string,
+): SessionsSpawnFlowLink | undefined {
+  const raw = params.flowLink;
+  if (raw == null) {
+    return undefined;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ToolInputError("flowLink must be an object.");
+  }
+  const record = raw as Record<string, unknown>;
+  const flowId = readStringParam(record, "flowId", { required: true });
+  const idempotencyKey = readStringParam(record, "idempotencyKey", { required: true });
+  const flowTaskNameRaw = readStringParam(record, "taskName");
+  const flowTaskNameResult = normalizeSubagentTaskName(flowTaskNameRaw);
+  if (flowTaskNameResult.error) {
+    throw new ToolInputError(flowTaskNameResult.error);
+  }
+  if (taskName && flowTaskNameResult.taskName && taskName !== flowTaskNameResult.taskName) {
+    throw new ToolInputError("flowLink.taskName must match taskName when both are provided.");
+  }
+  const expectedRevision =
+    typeof record.expectedRevision === "number" && Number.isFinite(record.expectedRevision)
+      ? Math.floor(record.expectedRevision)
+      : undefined;
+  const projectKey = readStringParam(record, "projectKey");
+  const controllerId = readStringParam(record, "controllerId");
+  return {
+    flowId,
+    idempotencyKey,
+    ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+    ...((flowTaskNameResult.taskName ?? taskName)
+      ? { taskName: flowTaskNameResult.taskName ?? taskName }
+      : {}),
+    ...(projectKey ? { projectKey } : {}),
+    ...(controllerId ? { controllerId } : {}),
+    idempotencyPayloadHash: "",
+  };
 }
 
 function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: OpenClawConfig }) {
@@ -290,6 +374,8 @@ export function createSessionsSpawnTool(
         });
       }
       const taskName = taskNameResult.taskName;
+      const flowLinkBase = readFlowLinkParam(params, taskName);
+      const effectiveTaskName = flowLinkBase?.taskName ?? taskName;
       const label = readStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
@@ -307,6 +393,13 @@ export function createSessionsSpawnTool(
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+      if (runtime === "acp" && flowLinkBase) {
+        return jsonResult({
+          status: "error",
+          error: 'flowLink is currently supported only for runtime="subagent".',
+          ...roleContext,
+        });
+      }
       if (runtime === "acp" && !acpAvailable) {
         return jsonResult({
           status: "error",
@@ -361,6 +454,40 @@ export function createSessionsSpawnTool(
             encoding?: "utf8" | "base64";
             mimeType?: string;
           }>)
+        : undefined;
+      const flowLink = flowLinkBase
+        ? {
+            ...flowLinkBase,
+            idempotencyPayloadHash: hashLinkedSpawnPayload({
+              runtime,
+              task,
+              taskName: effectiveTaskName,
+              label,
+              agentId: requestedAgentId,
+              resumeSessionId,
+              model: modelOverride,
+              thinking: thinkingOverrideRaw,
+              cwd,
+              mode,
+              cleanup,
+              expectsCompletionMessage,
+              sandbox,
+              context,
+              streamTo,
+              lightContext,
+              runTimeoutSeconds,
+              thread,
+              attachments,
+              attachAs: params.attachAs,
+              flowLink: {
+                flowId: flowLinkBase.flowId,
+                taskName: flowLinkBase.taskName,
+                idempotencyKey: flowLinkBase.idempotencyKey,
+                projectKey: flowLinkBase.projectKey,
+                controllerId: flowLinkBase.controllerId,
+              },
+            }),
+          }
         : undefined;
 
       if (runtime === "acp") {
@@ -439,7 +566,7 @@ export function createSessionsSpawnTool(
               requesterOrigin,
               requesterDisplayKey: ownership.completionRequesterDisplayKey,
               task,
-              taskName,
+              taskName: effectiveTaskName,
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds,
@@ -465,7 +592,7 @@ export function createSessionsSpawnTool(
       const result = await spawnSubagentDirect(
         {
           task,
-          taskName,
+          taskName: effectiveTaskName,
           label: label || undefined,
           agentId: requestedAgentId,
           model: modelOverride,
@@ -484,6 +611,7 @@ export function createSessionsSpawnTool(
             params.attachAs && typeof params.attachAs === "object"
               ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
               : undefined,
+          flowLink,
         },
         {
           agentSessionKey: opts?.agentSessionKey,

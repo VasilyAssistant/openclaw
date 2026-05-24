@@ -11,6 +11,13 @@ import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-regi
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  createLinkedTaskSpawnIdempotencyKey,
+  failLinkedTaskSpawn,
+  findLinkedTaskByIdempotencyForOwner,
+  reserveLinkedTaskInFlowForOwner,
+} from "../tasks/task-executor.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
@@ -147,6 +154,17 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  flowLink?: SpawnSubagentFlowLink;
+};
+
+export type SpawnSubagentFlowLink = {
+  flowId: string;
+  expectedRevision?: number;
+  taskName?: string;
+  idempotencyKey: string;
+  idempotencyPayloadHash: string;
+  projectKey?: string;
+  controllerId?: string;
 };
 
 export type SpawnSubagentContext = {
@@ -707,6 +725,14 @@ export async function spawnSubagentDirect(
     };
   }
   const taskName = taskNameResult.taskName;
+  const flowTaskNameResult = normalizeSubagentTaskName(params.flowLink?.taskName);
+  if (flowTaskNameResult.error) {
+    return {
+      status: "error",
+      error: flowTaskNameResult.error,
+    };
+  }
+  const linkedTaskName = flowTaskNameResult.taskName ?? taskName;
   const label = params.label?.trim() || "";
   const requestedAgentId = params.agentId?.trim();
 
@@ -779,6 +805,51 @@ export async function spawnSubagentDirect(
     agentSessionKey: ctx.agentSessionKey,
     completionOwnerKey: ctx.completionOwnerKey,
   });
+  const linkedFlowId = normalizeOptionalString(params.flowLink?.flowId);
+  const linkedIdempotencyKey = normalizeOptionalString(params.flowLink?.idempotencyKey);
+  const linkedPayloadHash = normalizeOptionalString(params.flowLink?.idempotencyPayloadHash);
+  let reusableLinkedTask: TaskRecord | undefined;
+  if (params.flowLink) {
+    if (!linkedFlowId || !linkedIdempotencyKey || !linkedPayloadHash) {
+      return {
+        status: "error",
+        error: "flowLink requires flowId, idempotencyKey, and an internal payload hash.",
+      };
+    }
+    const existingLinked = findLinkedTaskByIdempotencyForOwner({
+      flowId: linkedFlowId,
+      callerOwnerKey: ownership.completionRequesterSessionKey,
+      idempotencyKey: linkedIdempotencyKey,
+      idempotencyPayloadHash: linkedPayloadHash,
+    });
+    if (existingLinked.conflict) {
+      return {
+        status: "error",
+        error: existingLinked.reason ?? "Linked task idempotency payload conflict.",
+        childSessionKey: existingLinked.task?.childSessionKey,
+        runId: existingLinked.task?.runId,
+      };
+    }
+    if (!existingLinked.found) {
+      return {
+        status: "error",
+        error: existingLinked.reason ?? "Linked TaskFlow not found.",
+      };
+    }
+    if (existingLinked.reserved && existingLinked.task) {
+      reusableLinkedTask = existingLinked.task;
+      if (existingLinked.task.status !== "queued") {
+        return {
+          status: "accepted",
+          childSessionKey: existingLinked.task.childSessionKey,
+          runId: existingLinked.task.runId,
+          mode: spawnMode,
+          taskName: linkedTaskName,
+          note: "Linked spawn already exists for this idempotency key.",
+        };
+      }
+    }
+  }
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
   const maxSpawnDepth =
@@ -793,7 +864,7 @@ export async function spawnSubagentDirect(
   const maxChildren =
     cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
   const activeChildren = countActiveRunsForSession(requesterInternalKey);
-  if (activeChildren >= maxChildren) {
+  if (!reusableLinkedTask && activeChildren >= maxChildren) {
     return {
       status: "forbidden",
       error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
@@ -850,7 +921,8 @@ export async function spawnSubagentDirect(
       error: targetPolicy.error,
     };
   }
-  const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+  let childSessionKey =
+    reusableLinkedTask?.childSessionKey ?? `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey: requesterInternalKey,
@@ -1139,13 +1211,61 @@ export async function spawnSubagentDirect(
   }
   const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
-  const childIdem = crypto.randomUUID();
-  let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly
     ? false
     : expectsCompletionMessage;
+  let linkedTask = reusableLinkedTask;
+  let linkedSpawnIdempotencyKey: string | undefined;
+  if (params.flowLink && linkedFlowId && linkedIdempotencyKey && linkedPayloadHash) {
+    linkedSpawnIdempotencyKey =
+      linkedTask?.runId ??
+      createLinkedTaskSpawnIdempotencyKey({
+        ownerKey: ownership.completionRequesterSessionKey,
+        flowId: linkedFlowId,
+        idempotencyKey: linkedIdempotencyKey,
+      });
+    const reservation = reserveLinkedTaskInFlowForOwner({
+      flowId: linkedFlowId,
+      expectedRevision: params.flowLink.expectedRevision,
+      callerOwnerKey: ownership.completionRequesterSessionKey,
+      runtime: "subagent",
+      sourceId: linkedSpawnIdempotencyKey,
+      childSessionKey,
+      runId: linkedSpawnIdempotencyKey,
+      taskName: linkedTaskName,
+      idempotencyKey: linkedIdempotencyKey,
+      idempotencyPayloadHash: linkedPayloadHash,
+      projectKey: params.flowLink.projectKey,
+      controllerId: params.flowLink.controllerId,
+      agentId: targetAgentId,
+      label: label || undefined,
+      task,
+      deliveryStatus: shouldAnnounceCompletion ? "pending" : "not_applicable",
+      status: "queued",
+    });
+    if (reservation.conflict || !reservation.reserved || !reservation.task) {
+      await rollbackPreparedContextEngine(contextEnginePreparation);
+      await cleanupFailedSpawnBeforeAgentStart({
+        childSessionKey,
+        attachmentAbsDir,
+        emitLifecycleHooks: threadBindingReady,
+        deleteTranscript: true,
+      });
+      return {
+        status: "error",
+        error: reservation.reason ?? "Failed to reserve linked TaskFlow child task.",
+        childSessionKey: reservation.task?.childSessionKey,
+        runId: reservation.task?.runId,
+      };
+    }
+    linkedTask = reservation.task;
+    childSessionKey = reservation.task.childSessionKey ?? childSessionKey;
+    linkedSpawnIdempotencyKey = reservation.task.runId ?? linkedSpawnIdempotencyKey;
+  }
+  const childIdem = linkedSpawnIdempotencyKey ?? crypto.randomUUID();
+  let childRunId: string = childIdem;
   try {
     const {
       spawnedBy: _spawnedBy,
@@ -1188,6 +1308,13 @@ export async function spawnSubagentDirect(
       childRunId = runId;
     }
   } catch (err) {
+    if (linkedTask) {
+      failLinkedTaskSpawn({
+        taskId: linkedTask.taskId,
+        error: summarizeError(err),
+        terminalSummary: "Linked subagent spawn failed before the child run was accepted.",
+      });
+    }
     await rollbackPreparedContextEngine(contextEnginePreparation);
     if (attachmentAbsDir) {
       try {
@@ -1259,7 +1386,7 @@ export async function spawnSubagentDirect(
       requesterOrigin,
       requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
-      taskName,
+      taskName: linkedTaskName,
       cleanup,
       label: label || undefined,
       model: resolvedModel,
@@ -1271,8 +1398,21 @@ export async function spawnSubagentDirect(
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      linkedTask: linkedTask
+        ? {
+            taskId: linkedTask.taskId,
+            ...(linkedTask.parentFlowId ? { flowId: linkedTask.parentFlowId } : {}),
+          }
+        : undefined,
     });
   } catch (err) {
+    if (linkedTask) {
+      failLinkedTaskSpawn({
+        taskId: linkedTask.taskId,
+        error: summarizeError(err),
+        terminalSummary: "Linked subagent run registration failed.",
+      });
+    }
     await rollbackPreparedContextEngine(contextEnginePreparation);
     if (attachmentAbsDir) {
       try {
@@ -1347,7 +1487,7 @@ export async function spawnSubagentDirect(
     childSessionKey,
     runId: childRunId,
     mode: spawnMode,
-    taskName,
+    taskName: linkedTaskName,
     note: preparedSpawnContext.forkFallbackNote
       ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
       : acceptedNote,

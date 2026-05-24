@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
@@ -14,11 +15,13 @@ import {
   isParentFlowLinkError,
   linkTaskToFlowById,
   listTasksForFlowId,
+  markTaskTerminalById,
   markTaskLostById,
   markTaskRunningByRunId,
   finalizeTaskRunByRunId as finalizeTaskRunByRunIdInRegistry,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
+  updateTaskRunLinkById,
 } from "./runtime-internal.js";
 import { getTaskFlowByIdForOwner } from "./task-flow-owner-access.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
@@ -126,6 +129,12 @@ type RunTaskInFlowParams = {
   parentTaskId?: string;
   agentId?: string;
   runId?: string;
+  taskName?: string;
+  idempotencyKey?: string;
+  idempotencyPayloadHash?: string;
+  projectKey?: string;
+  controllerId?: string;
+  attempt?: number;
   label?: string;
   task: string;
   notifyPolicy?: TaskNotifyPolicy;
@@ -369,6 +378,23 @@ type RunTaskInFlowResult = {
   task?: TaskRecord;
 };
 
+export type LinkedTaskReservationResult = {
+  found: boolean;
+  reserved: boolean;
+  created: boolean;
+  conflict?: boolean;
+  reason?: string;
+  flow?: TaskFlowRecord;
+  task?: TaskRecord;
+};
+
+export type LinkedTaskFinalizeResult = {
+  found: boolean;
+  finalized: boolean;
+  reason?: string;
+  task?: TaskRecord;
+};
+
 function isActiveTaskStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
 }
@@ -466,6 +492,239 @@ function mapRunTaskInFlowCreateError(params: {
   throw params.error;
 }
 
+function normalizeLinkedTaskKey(value: string | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function findLinkedTaskInFlowByIdempotency(params: {
+  flowId: string;
+  ownerKey: string;
+  idempotencyKey: string;
+}): TaskRecord | undefined {
+  const idempotencyKey = normalizeLinkedTaskKey(params.idempotencyKey);
+  if (!idempotencyKey) {
+    return undefined;
+  }
+  return listTasksForFlowId(params.flowId).find(
+    (task) =>
+      task.ownerKey.trim() === params.ownerKey.trim() &&
+      normalizeLinkedTaskKey(task.idempotencyKey) === idempotencyKey,
+  );
+}
+
+export function createLinkedTaskSpawnIdempotencyKey(params: {
+  ownerKey: string;
+  flowId: string;
+  idempotencyKey: string;
+}): string {
+  const hash = crypto
+    .createHash("sha256")
+    .update(params.ownerKey.trim())
+    .update("\0")
+    .update(params.flowId.trim())
+    .update("\0")
+    .update(params.idempotencyKey.trim())
+    .digest("hex");
+  return `linked-spawn:${hash}`;
+}
+
+export function findLinkedTaskByIdempotencyForOwner(params: {
+  flowId: string;
+  callerOwnerKey: string;
+  idempotencyKey: string;
+  idempotencyPayloadHash?: string;
+}): LinkedTaskReservationResult {
+  const flow = getTaskFlowByIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.callerOwnerKey,
+  });
+  if (!flow) {
+    return {
+      found: false,
+      reserved: false,
+      created: false,
+      reason: "Flow not found.",
+    };
+  }
+  const idempotencyKey = normalizeLinkedTaskKey(params.idempotencyKey);
+  if (!idempotencyKey) {
+    return {
+      found: true,
+      reserved: false,
+      created: false,
+      flow,
+      reason: "Linked task idempotencyKey is required.",
+    };
+  }
+  const existing = findLinkedTaskInFlowByIdempotency({
+    flowId: flow.flowId,
+    ownerKey: flow.ownerKey,
+    idempotencyKey,
+  });
+  if (!existing) {
+    return {
+      found: true,
+      reserved: false,
+      created: false,
+      flow,
+    };
+  }
+  const payloadHash = normalizeLinkedTaskKey(params.idempotencyPayloadHash);
+  const existingPayloadHash = normalizeLinkedTaskKey(existing.idempotencyPayloadHash);
+  if (payloadHash && existingPayloadHash && payloadHash !== existingPayloadHash) {
+    return {
+      found: true,
+      reserved: false,
+      created: false,
+      conflict: true,
+      flow,
+      task: existing,
+      reason: "Linked task idempotency payload conflict.",
+    };
+  }
+  return {
+    found: true,
+    reserved: true,
+    created: false,
+    flow,
+    task: existing,
+  };
+}
+
+export function reserveLinkedTaskInFlowForOwner(
+  params: RunTaskInFlowParams & {
+    callerOwnerKey: string;
+    idempotencyKey: string;
+    idempotencyPayloadHash: string;
+    taskName?: string;
+    projectKey?: string;
+    controllerId?: string;
+    attempt?: number;
+  },
+): LinkedTaskReservationResult {
+  const existing = findLinkedTaskByIdempotencyForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.callerOwnerKey,
+    idempotencyKey: params.idempotencyKey,
+    idempotencyPayloadHash: params.idempotencyPayloadHash,
+  });
+  if (!existing.found || existing.reserved || existing.conflict) {
+    return existing;
+  }
+  if (!existing.flow) {
+    return {
+      found: false,
+      reserved: false,
+      created: false,
+      reason: existing.reason ?? "Flow not found.",
+    };
+  }
+  const created = runTaskInFlowForOwner({
+    ...params,
+    flowId: existing.flow.flowId,
+    callerOwnerKey: params.callerOwnerKey,
+    taskName: params.taskName,
+    idempotencyKey: params.idempotencyKey,
+    idempotencyPayloadHash: params.idempotencyPayloadHash,
+    projectKey: params.projectKey,
+    controllerId: params.controllerId,
+    attempt: params.attempt,
+    status: params.status ?? "queued",
+  });
+  return {
+    found: created.found,
+    reserved: created.created,
+    created: created.created,
+    reason: created.reason,
+    flow: created.flow,
+    task: created.task,
+  };
+}
+
+export function finalizeLinkedTaskSpawn(params: {
+  taskId: string;
+  sourceId?: string;
+  childSessionKey?: string;
+  runId: string;
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+  deliveryStatus?: TaskDeliveryStatus;
+}): LinkedTaskFinalizeResult {
+  const task = getTaskById(params.taskId);
+  if (!task) {
+    return {
+      found: false,
+      finalized: false,
+      reason: "Task not found.",
+    };
+  }
+  if (task.status !== "queued" && task.status !== "running") {
+    return {
+      found: true,
+      finalized: false,
+      reason: "Task is already terminal.",
+      task,
+    };
+  }
+  const updated = updateTaskRunLinkById({
+    taskId: task.taskId,
+    sourceId: params.sourceId,
+    childSessionKey: params.childSessionKey,
+    runId: params.runId,
+    status: "running",
+    startedAt: params.startedAt ?? task.startedAt ?? Date.now(),
+    lastEventAt: params.lastEventAt ?? Date.now(),
+    progressSummary: params.progressSummary,
+    deliveryStatus: params.deliveryStatus,
+  });
+  return {
+    found: true,
+    finalized: Boolean(updated),
+    task: updated ?? task,
+    ...(updated ? {} : { reason: "Task not found." }),
+  };
+}
+
+export function failLinkedTaskSpawn(params: {
+  taskId: string;
+  endedAt?: number;
+  error?: string;
+  terminalSummary?: string | null;
+}): LinkedTaskFinalizeResult {
+  const task = getTaskById(params.taskId);
+  if (!task) {
+    return {
+      found: false,
+      finalized: false,
+      reason: "Task not found.",
+    };
+  }
+  if (task.status !== "queued" && task.status !== "running") {
+    return {
+      found: true,
+      finalized: false,
+      reason: "Task is already terminal.",
+      task,
+    };
+  }
+  const endedAt = params.endedAt ?? Date.now();
+  const updated = markTaskTerminalById({
+    taskId: task.taskId,
+    status: "failed",
+    endedAt,
+    lastEventAt: endedAt,
+    error: params.error,
+    terminalSummary: params.terminalSummary,
+  });
+  return {
+    found: true,
+    finalized: Boolean(updated),
+    task: updated ?? task,
+    ...(updated ? {} : { reason: "Task not found." }),
+  };
+}
+
 export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
   const flow = getTaskFlowById(params.flowId);
   if (!flow) {
@@ -519,6 +778,12 @@ export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult 
     parentTaskId: params.parentTaskId,
     agentId: params.agentId,
     runId: params.runId,
+    taskName: params.taskName,
+    idempotencyKey: params.idempotencyKey,
+    idempotencyPayloadHash: params.idempotencyPayloadHash,
+    projectKey: params.projectKey,
+    controllerId: params.controllerId,
+    attempt: params.attempt,
     label: params.label,
     task: params.task,
     preferMetadata: params.preferMetadata,
@@ -574,6 +839,12 @@ export function runTaskInFlowForOwner(
     parentTaskId: params.parentTaskId,
     agentId: params.agentId,
     runId: params.runId,
+    taskName: params.taskName,
+    idempotencyKey: params.idempotencyKey,
+    idempotencyPayloadHash: params.idempotencyPayloadHash,
+    projectKey: params.projectKey,
+    controllerId: params.controllerId,
+    attempt: params.attempt,
     label: params.label,
     task: params.task,
     preferMetadata: params.preferMetadata,

@@ -22,6 +22,12 @@ type TaskRegistryRow = {
   parent_task_id: string | null;
   agent_id: string | null;
   run_id: string | null;
+  task_name: string | null;
+  idempotency_key: string | null;
+  idempotency_payload_hash: string | null;
+  project_key: string | null;
+  controller_id: string | null;
+  attempt: number | bigint | null;
   label: string | null;
   task: string;
   status: TaskRecord["status"];
@@ -84,6 +90,12 @@ const TASK_RUN_SELECT_COLUMNS = `
   parent_task_id,
   agent_id,
   run_id,
+  task_name,
+  idempotency_key,
+  idempotency_payload_hash,
+  project_key,
+  controller_id,
+  attempt,
   label,
   task,
   status,
@@ -144,6 +156,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const endedAt = normalizeNumber(row.ended_at);
   const lastEventAt = normalizeNumber(row.last_event_at);
   const cleanupAfter = normalizeNumber(row.cleanup_after);
+  const attempt = normalizeNumber(row.attempt);
   const requesterSessionKey =
     row.scope_kind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
   return {
@@ -159,6 +172,14 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.parent_task_id ? { parentTaskId: row.parent_task_id } : {}),
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
     ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.task_name ? { taskName: row.task_name } : {}),
+    ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
+    ...(row.idempotency_payload_hash
+      ? { idempotencyPayloadHash: row.idempotency_payload_hash }
+      : {}),
+    ...(row.project_key ? { projectKey: row.project_key } : {}),
+    ...(row.controller_id ? { controllerId: row.controller_id } : {}),
+    ...(attempt != null ? { attempt } : {}),
     ...(row.label ? { label: row.label } : {}),
     task: row.task,
     status: row.status,
@@ -200,6 +221,12 @@ function bindTaskRecordBase(record: TaskRecord) {
     parent_task_id: record.parentTaskId ?? null,
     agent_id: record.agentId ?? null,
     run_id: record.runId ?? null,
+    task_name: record.taskName ?? null,
+    idempotency_key: record.idempotencyKey ?? null,
+    idempotency_payload_hash: record.idempotencyPayloadHash ?? null,
+    project_key: record.projectKey ?? null,
+    controller_id: record.controllerId ?? null,
+    attempt: record.attempt ?? null,
     label: record.label ?? null,
     task: record.task,
     status: record.status,
@@ -262,6 +289,12 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         parent_task_id,
         agent_id,
         run_id,
+        task_name,
+        idempotency_key,
+        idempotency_payload_hash,
+        project_key,
+        controller_id,
+        attempt,
         label,
         task,
         status,
@@ -289,6 +322,12 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         @parent_task_id,
         @agent_id,
         @run_id,
+        @task_name,
+        @idempotency_key,
+        @idempotency_payload_hash,
+        @project_key,
+        @controller_id,
+        @attempt,
         @label,
         @task,
         @status,
@@ -316,6 +355,12 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         parent_task_id = excluded.parent_task_id,
         agent_id = excluded.agent_id,
         run_id = excluded.run_id,
+        task_name = excluded.task_name,
+        idempotency_key = excluded.idempotency_key,
+        idempotency_payload_hash = excluded.idempotency_payload_hash,
+        project_key = excluded.project_key,
+        controller_id = excluded.controller_id,
+        attempt = excluded.attempt,
         label = excluded.label,
         task = excluded.task,
         status = excluded.status,
@@ -411,6 +456,12 @@ function ensureSchema(db: DatabaseSync) {
       parent_task_id TEXT,
       agent_id TEXT,
       run_id TEXT,
+      task_name TEXT,
+      idempotency_key TEXT,
+      idempotency_payload_hash TEXT,
+      project_key TEXT,
+      controller_id TEXT,
+      attempt INTEGER,
       label TEXT,
       task TEXT NOT NULL,
       status TEXT NOT NULL,
@@ -434,6 +485,24 @@ function ensureSchema(db: DatabaseSync) {
   if (!hasTaskRunsColumn(db, "parent_flow_id")) {
     db.exec(`ALTER TABLE task_runs ADD COLUMN parent_flow_id TEXT;`);
   }
+  if (!hasTaskRunsColumn(db, "task_name")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN task_name TEXT;`);
+  }
+  if (!hasTaskRunsColumn(db, "idempotency_key")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN idempotency_key TEXT;`);
+  }
+  if (!hasTaskRunsColumn(db, "idempotency_payload_hash")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN idempotency_payload_hash TEXT;`);
+  }
+  if (!hasTaskRunsColumn(db, "project_key")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN project_key TEXT;`);
+  }
+  if (!hasTaskRunsColumn(db, "controller_id")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN controller_id TEXT;`);
+  }
+  if (!hasTaskRunsColumn(db, "attempt")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN attempt INTEGER;`);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_delivery_state (
       task_id TEXT PRIMARY KEY,
@@ -448,6 +517,13 @@ function ensureSchema(db: DatabaseSync) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_at);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);`);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_task_runs_flow_idempotency ON task_runs(parent_flow_id, idempotency_key);`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_task_runs_flow_task_name ON task_runs(parent_flow_id, task_name);`,
+  );
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_project_key ON task_runs(project_key);`);
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);`,
   );

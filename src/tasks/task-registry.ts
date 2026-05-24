@@ -749,6 +749,12 @@ function mergeExistingTaskForCreate(
     parentFlowId?: string;
     parentTaskId?: string;
     agentId?: string;
+    taskName?: string;
+    idempotencyKey?: string;
+    idempotencyPayloadHash?: string;
+    projectKey?: string;
+    controllerId?: string;
+    attempt?: number;
     label?: string;
     task: string;
     preferMetadata?: boolean;
@@ -785,6 +791,24 @@ function mergeExistingTaskForCreate(
   }
   if (params.agentId?.trim() && !existing.agentId?.trim()) {
     patch.agentId = params.agentId.trim();
+  }
+  if (params.taskName?.trim() && !existing.taskName?.trim()) {
+    patch.taskName = params.taskName.trim();
+  }
+  if (params.idempotencyKey?.trim() && !existing.idempotencyKey?.trim()) {
+    patch.idempotencyKey = params.idempotencyKey.trim();
+  }
+  if (params.idempotencyPayloadHash?.trim() && !existing.idempotencyPayloadHash?.trim()) {
+    patch.idempotencyPayloadHash = params.idempotencyPayloadHash.trim();
+  }
+  if (params.projectKey?.trim() && !existing.projectKey?.trim()) {
+    patch.projectKey = params.projectKey.trim();
+  }
+  if (params.controllerId?.trim() && !existing.controllerId?.trim()) {
+    patch.controllerId = params.controllerId.trim();
+  }
+  if (params.attempt != null && existing.attempt == null) {
+    patch.attempt = params.attempt;
   }
   const nextLabel = params.label?.trim();
   if (params.preferMetadata) {
@@ -1502,6 +1526,12 @@ export function createTaskRecord(params: {
   parentTaskId?: string;
   agentId?: string;
   runId?: string;
+  taskName?: string;
+  idempotencyKey?: string;
+  idempotencyPayloadHash?: string;
+  projectKey?: string;
+  controllerId?: string;
+  attempt?: number;
   label?: string;
   task: string;
   preferMetadata?: boolean;
@@ -1581,6 +1611,12 @@ export function createTaskRecord(params: {
     parentTaskId: normalizeOptionalString(params.parentTaskId),
     agentId,
     runId: normalizeOptionalString(params.runId),
+    taskName: normalizeOptionalString(params.taskName),
+    idempotencyKey: normalizeOptionalString(params.idempotencyKey),
+    idempotencyPayloadHash: normalizeOptionalString(params.idempotencyPayloadHash),
+    projectKey: normalizeOptionalString(params.projectKey),
+    controllerId: normalizeOptionalString(params.controllerId),
+    attempt: params.attempt,
     label: normalizeOptionalString(params.label),
     task: params.task,
     status,
@@ -1843,6 +1879,49 @@ export function updateTaskNotifyPolicyById(params: {
     notifyPolicy: params.notifyPolicy,
     lastEventAt: Date.now(),
   });
+}
+
+export function updateTaskRunLinkById(params: {
+  taskId: string;
+  sourceId?: string;
+  childSessionKey?: string;
+  runId?: string;
+  status?: Extract<TaskStatus, "queued" | "running">;
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+  deliveryStatus?: TaskDeliveryStatus;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {};
+  if (params.sourceId !== undefined) {
+    patch.sourceId = normalizeOptionalString(params.sourceId);
+  }
+  if (params.childSessionKey !== undefined) {
+    patch.childSessionKey = normalizeOptionalString(params.childSessionKey);
+  }
+  if (params.runId !== undefined) {
+    patch.runId = normalizeOptionalString(params.runId);
+  }
+  if (params.status !== undefined) {
+    patch.status = params.status;
+  }
+  if (params.startedAt !== undefined) {
+    patch.startedAt = params.startedAt;
+  }
+  if (params.lastEventAt !== undefined) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  if (params.progressSummary !== undefined) {
+    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
+  }
+  if (params.deliveryStatus !== undefined) {
+    patch.deliveryStatus = params.deliveryStatus;
+  }
+  if (Object.keys(patch).length === 0) {
+    return getTaskById(params.taskId) ?? null;
+  }
+  return updateTask(params.taskId, patch);
 }
 
 export function linkTaskToFlowById(params: { taskId: string; flowId: string }): TaskRecord | null {
