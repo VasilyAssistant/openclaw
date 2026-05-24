@@ -19,6 +19,8 @@ const DEFAULT_MAX_STDOUT_BYTES = 512_000;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_APPROVAL_TIMEOUT_MS = 600_000;
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_LINKED_SPAWN_TIMEOUT_MS = 300_000;
+const WORKFLOW_STATE_KEY = "lobsterManagedWorkflow";
 
 type BoundTaskFlow = ReturnType<
   NonNullable<OpenClawPluginApi["runtime"]>["tasks"]["managedFlows"]["bindSession"]
@@ -113,6 +115,15 @@ type ApprovedTaskSideEffectResult = {
   flow: FlowRecord;
 };
 
+type LinkedSpawnAcceptedDetails = {
+  status: "accepted";
+  childSessionKey?: string;
+  runId?: string;
+  mode?: string;
+  taskName?: string;
+  note?: string;
+};
+
 type WorkflowClaim = {
   workflowId: string;
   idempotencyKey: string;
@@ -121,6 +132,14 @@ type WorkflowClaim = {
   revision?: number;
   sideEffect?: JsonLike;
   updatedAtMs: number;
+};
+
+type StoredWorkflowState = {
+  workflowId?: string;
+  idempotencyKey?: string;
+  argsJson?: string;
+  args?: JsonLike;
+  createdAtMs?: number;
 };
 
 type ApprovalResult =
@@ -394,6 +413,66 @@ function claimKey(workflowId: string, idempotencyKey: string): string {
   return `${workflowId}:${idempotencyKey}`;
 }
 
+function buildWorkflowStateJson(params: {
+  baseStateJson?: JsonLike;
+  workflowId: string;
+  idempotencyKey?: string;
+  argsJson?: string;
+}): JsonLike {
+  const workflowState: Record<string, JsonLike> = {
+    workflowId: params.workflowId,
+    createdAtMs: Date.now(),
+  };
+  if (params.idempotencyKey) {
+    workflowState.idempotencyKey = params.idempotencyKey;
+  }
+  if (params.argsJson) {
+    workflowState.argsJson = params.argsJson;
+  }
+  const baseRecord = asRecord(params.baseStateJson);
+  if (baseRecord) {
+    return {
+      ...baseRecord,
+      [WORKFLOW_STATE_KEY]: workflowState,
+    };
+  }
+  if (params.baseStateJson !== undefined) {
+    return {
+      value: params.baseStateJson,
+      [WORKFLOW_STATE_KEY]: workflowState,
+    };
+  }
+  return {
+    [WORKFLOW_STATE_KEY]: workflowState,
+  };
+}
+
+function readStoredWorkflowState(params: {
+  taskFlow: BoundTaskFlow;
+  flowId: string;
+  workflowId: string;
+}): StoredWorkflowState | undefined {
+  const flow = params.taskFlow.get(params.flowId);
+  const stateRecord = asRecord(flow?.stateJson);
+  const stored = asRecord(stateRecord?.[WORKFLOW_STATE_KEY]);
+  if (!stored) {
+    return undefined;
+  }
+  const workflowId = readString(stored.workflowId);
+  if (workflowId !== params.workflowId) {
+    return undefined;
+  }
+  return {
+    workflowId,
+    ...(readString(stored.idempotencyKey)
+      ? { idempotencyKey: readString(stored.idempotencyKey) }
+      : {}),
+    ...(readString(stored.argsJson) ? { argsJson: readString(stored.argsJson) } : {}),
+    ...(stored.args !== undefined ? { args: stored.args as JsonLike } : {}),
+    ...(typeof stored.createdAtMs === "number" ? { createdAtMs: stored.createdAtMs } : {}),
+  };
+}
+
 function flowRevisionFromResult(result: ManagedLobsterFlowResult): {
   flowId?: string;
   revision?: number;
@@ -581,7 +660,118 @@ function buildApprovedTaskApprovalDescription(params: {
     .join("\n\n");
 }
 
-function runApprovedTaskSideEffect(params: {
+function readToolInvokeDetails(raw: unknown): Record<string, unknown> {
+  const envelope = asRecord(raw);
+  if (!envelope || envelope.ok !== true) {
+    const error = asRecord(envelope?.error);
+    throw new Error(
+      `Lobster managed workflow onApproved sessions_spawn invoke failed: ${
+        readString(error?.message) ?? "tools.invoke did not return ok"
+      }`,
+    );
+  }
+  const output = asRecord(envelope.output);
+  const details = asRecord(output?.details) ?? output;
+  if (!details) {
+    throw new Error("Lobster managed workflow onApproved sessions_spawn returned no details.");
+  }
+  return details;
+}
+
+function readLinkedSpawnAcceptedDetails(
+  details: Record<string, unknown>,
+): LinkedSpawnAcceptedDetails {
+  const status = readString(details.status);
+  if (status !== "accepted") {
+    const error = readString(details.error) ?? readString(asRecord(details.error)?.message);
+    throw new Error(
+      `Lobster managed workflow onApproved sessions_spawn was not accepted: ${
+        error ?? status ?? "unknown status"
+      }`,
+    );
+  }
+  return {
+    status,
+    ...(readString(details.childSessionKey)
+      ? { childSessionKey: readString(details.childSessionKey) }
+      : {}),
+    ...(readString(details.runId) ? { runId: readString(details.runId) } : {}),
+    ...(readString(details.mode) ? { mode: readString(details.mode) } : {}),
+    ...(readString(details.taskName) ? { taskName: readString(details.taskName) } : {}),
+    ...(readString(details.note) ? { note: readString(details.note) } : {}),
+  };
+}
+
+async function runLinkedSubagentSideEffect(params: {
+  taskFlow: BoundTaskFlow;
+  rendered: RenderedApprovedTask;
+  flowId: string;
+  expectedRevision: number;
+  ctx: OpenClawPluginToolContext;
+  workflowId: string;
+  idempotencyKey?: string;
+  callGatewayTool?: GatewayCaller;
+}): Promise<ApprovedTaskSideEffectResult> {
+  const linkedIdempotencyKey =
+    params.idempotencyKey ?? params.rendered.runId ?? params.rendered.sourceId;
+  if (!linkedIdempotencyKey) {
+    throw new Error("Lobster managed workflow onApproved linked subagent requires idempotencyKey.");
+  }
+  const callGatewayTool = params.callGatewayTool ?? (await loadGatewayCaller());
+  if (!callGatewayTool) {
+    throw new Error("Lobster managed workflow onApproved linked subagent requires gateway access.");
+  }
+  const spawnArgs = {
+    task: params.rendered.task,
+    runtime: "subagent",
+    ...(params.rendered.label ? { label: params.rendered.label } : {}),
+    ...(params.rendered.agentId ? { agentId: params.rendered.agentId } : {}),
+    flowLink: {
+      flowId: params.flowId,
+      expectedRevision: params.expectedRevision,
+      idempotencyKey: linkedIdempotencyKey,
+      controllerId: params.workflowId,
+    },
+  };
+  const raw = await callGatewayTool(
+    "tools.invoke",
+    { timeoutMs: DEFAULT_LINKED_SPAWN_TIMEOUT_MS },
+    {
+      name: "sessions_spawn",
+      sessionKey: params.ctx.sessionKey ?? "main",
+      idempotencyKey: `lobster:${params.workflowId}:${linkedIdempotencyKey}:sessions_spawn`,
+      args: spawnArgs,
+    },
+  );
+  const accepted = readLinkedSpawnAcceptedDetails(readToolInvokeDetails(raw));
+  const flow = params.taskFlow.get(params.flowId);
+  if (!flow || flow.syncMode !== "managed") {
+    throw new Error("Lobster managed workflow onApproved linked subagent lost its TaskFlow.");
+  }
+  return {
+    flow: flow as FlowRecord,
+    sideEffect: {
+      type: "runTask",
+      mode: "linked_subagent_spawn",
+      created: true,
+      flowId: flow.flowId,
+      flowRevision: flow.revision,
+      task: {
+        runtime: "subagent",
+        status: "running",
+        task: params.rendered.task,
+        ...(params.rendered.label ? { label: params.rendered.label } : {}),
+        ...(accepted.childSessionKey ? { childSessionKey: accepted.childSessionKey } : {}),
+        ...(accepted.runId ? { runId: accepted.runId } : {}),
+        ...(accepted.taskName ? { taskName: accepted.taskName } : {}),
+        parentFlowId: flow.flowId,
+      },
+      spawn: accepted,
+    },
+  };
+}
+
+async function runApprovedTaskSideEffect(params: {
   taskFlow: BoundTaskFlow;
   taskConfig: ApprovedTaskConfig;
   flowId: string;
@@ -592,7 +782,8 @@ function runApprovedTaskSideEffect(params: {
   argsJson?: string;
   args?: JsonLike;
   approval: Extract<ApprovalResult, { status: "approved" }>;
-}): ApprovedTaskSideEffectResult {
+  callGatewayTool?: GatewayCaller;
+}): Promise<ApprovedTaskSideEffectResult> {
   const rendered = renderApprovedTask(
     params.taskConfig,
     buildApprovedTaskContext({
@@ -606,6 +797,18 @@ function runApprovedTaskSideEffect(params: {
       approval: params.approval,
     }),
   );
+  if (params.taskConfig.runtime === "subagent") {
+    return await runLinkedSubagentSideEffect({
+      taskFlow: params.taskFlow,
+      rendered,
+      flowId: params.flowId,
+      expectedRevision: params.expectedRevision,
+      ctx: params.ctx,
+      workflowId: params.workflowId,
+      ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+      ...(params.callGatewayTool ? { callGatewayTool: params.callGatewayTool } : {}),
+    });
+  }
   const now = Date.now();
   const created = params.taskFlow.runTask({
     flowId: params.flowId,
@@ -752,6 +955,7 @@ async function maybeResumeAfterInlineApproval(params: {
               ...(params.argsJson ? { argsJson: params.argsJson } : {}),
               ...(params.args !== undefined ? { args: params.args } : {}),
               approval,
+              ...(params.callGatewayTool ? { callGatewayTool: params.callGatewayTool } : {}),
             });
           },
         }
@@ -778,6 +982,12 @@ async function executeRun(params: {
   const stateJson = parseJsonLike(params.input.flowStateJson, "flowStateJson");
   const argsJson = readString(params.input.argsJson);
   const args = parseJsonLike(argsJson, "argsJson");
+  const workflowStateJson = buildWorkflowStateJson({
+    baseStateJson: stateJson,
+    workflowId: params.workflowId,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(argsJson ? { argsJson } : {}),
+  });
   const store = idempotencyKey
     ? await resolveIdempotencyStore(params.api, params.options)
     : undefined;
@@ -821,7 +1031,7 @@ async function executeRun(params: {
       goal: workflow.goal,
       ...(workflow.currentStep ? { currentStep: workflow.currentStep } : {}),
       ...(workflow.waitingStep ? { waitingStep: workflow.waitingStep } : {}),
-      ...(stateJson !== undefined ? { stateJson } : {}),
+      stateJson: workflowStateJson,
     });
     const bridged = await maybeResumeAfterInlineApproval({
       result: initial,
@@ -884,6 +1094,8 @@ async function executeResume(params: {
   ctx: OpenClawPluginToolContext;
   taskFlow: BoundTaskFlow;
   runner: LobsterRunner;
+  options?: LobsterManagedWorkflowToolOptions;
+  toolCallId: string;
   workflowId: string;
   input: Record<string, unknown>;
 }) {
@@ -893,9 +1105,6 @@ async function executeResume(params: {
   const token = readString(params.input.token);
   const approvalId = readString(params.input.approvalId);
   const approve = params.input.approve;
-  const idempotencyKey = readString(params.input.idempotencyKey);
-  const argsJson = readString(params.input.argsJson);
-  const args = parseJsonLike(argsJson, "argsJson");
   if (!flowId) {
     throw new Error("flowId required for Lobster managed workflow resume");
   }
@@ -908,6 +1117,15 @@ async function executeResume(params: {
   if (typeof approve !== "boolean") {
     throw new Error("approve required for Lobster managed workflow resume");
   }
+  const stored = readStoredWorkflowState({
+    taskFlow: params.taskFlow,
+    flowId,
+    workflowId: params.workflowId,
+  });
+  const idempotencyKey = readString(params.input.idempotencyKey) ?? stored?.idempotencyKey;
+  const argsJson = readString(params.input.argsJson) ?? stored?.argsJson;
+  const parsedArgs = parseJsonLike(argsJson, "argsJson");
+  const args = parsedArgs !== undefined ? parsedArgs : stored?.args;
   const result = await resumeManagedLobsterFlow({
     taskFlow: params.taskFlow,
     runner: params.runner,
@@ -944,6 +1162,9 @@ async function executeResume(params: {
                 approvalRequestId: approvalId ?? token ?? "manual",
                 decision: "allow-once",
               },
+              ...(params.options?.callGatewayTool
+                ? { callGatewayTool: params.options.callGatewayTool }
+                : {}),
             });
           },
         }
@@ -1007,6 +1228,8 @@ export function createLobsterManagedWorkflowTool(
           ctx,
           taskFlow,
           runner,
+          options,
+          toolCallId,
           workflowId,
           input,
         });
