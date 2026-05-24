@@ -12,6 +12,7 @@ import {
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -354,20 +355,25 @@ export async function getReplyFromConfig(
     }
   }
 
-  const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
-    resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
-      const workspaceDirRawLocal =
-        resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-      return {
-        workspaceDirRaw: workspaceDirRawLocal,
-        workspaceDirForNativeCommand: workspaceDirRawLocal,
-        agentDir: resolveAgentDir(cfg, agentId),
-        timeoutMs: resolveAgentTimeoutMs({
-          cfg,
-          overrideSeconds: opts?.timeoutOverrideSeconds,
-        }),
-      };
-    });
+  const {
+    workspaceDirRaw: agentWorkspaceDirRaw,
+    workspaceDirForNativeCommand,
+    agentDir,
+    timeoutMs,
+  } = resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
+    const workspaceDirRawLocal =
+      resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+    return {
+      workspaceDirRaw: workspaceDirRawLocal,
+      workspaceDirForNativeCommand: workspaceDirRawLocal,
+      agentDir: resolveAgentDir(cfg, agentId),
+      timeoutMs: resolveAgentTimeoutMs({
+        cfg,
+        overrideSeconds: opts?.timeoutOverrideSeconds,
+      }),
+    };
+  });
+  let workspaceDirRaw = agentWorkspaceDirRaw;
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
     const configuredTypingSeconds =
       agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
@@ -410,16 +416,65 @@ export async function getReplyFromConfig(
     return nativeSlashCommandFastReply.reply;
   }
 
-  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-    useFastTestBootstrap
-      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-      : await ensureAgentWorkspace({
+  const commandAuthorized = finalized.CommandAuthorized;
+  let fastBootstrapWorkspaceDir: string | undefined;
+  if (useFastTestBootstrap) {
+    await traceGetReplyPhase("reply.ensure_workspace", async () => {
+      await fs.mkdir(workspaceDirRaw, { recursive: true });
+      fastBootstrapWorkspaceDir = workspaceDirRaw;
+    });
+  }
+  const sessionState = useFastTestBootstrap
+    ? initFastReplySessionState({
+        ctx: finalized,
+        cfg,
+        agentId,
+        commandAuthorized,
+        workspaceDir: fastBootstrapWorkspaceDir ?? workspaceDirRaw,
+      })
+    : await traceGetReplyPhase("reply.init_session_state", () =>
+        initSessionState({
+          ctx: finalized,
+          cfg,
+          commandAuthorized,
+        }),
+      );
+  let {
+    sessionCtx,
+    sessionEntry,
+    previousSessionEntry,
+    sessionStore,
+    sessionKey,
+    sessionId,
+    isNewSession,
+    resetTriggered,
+    systemSent,
+    abortedLastRun,
+    storePath,
+    sessionScope,
+    groupResolution,
+    isGroup,
+    triggerBodyNormalized,
+    bodyStripped,
+  } = sessionState;
+  resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
+
+  const spawnedWorkspaceDirRaw = resolveIngressWorkspaceOverrideForSpawnedRun({
+    spawnedBy: sessionEntry?.spawnedBy,
+    workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+  });
+  workspaceDirRaw = spawnedWorkspaceDirRaw ?? workspaceDirRaw;
+  const workspaceDir =
+    fastBootstrapWorkspaceDir ??
+    (
+      await traceGetReplyPhase("reply.ensure_workspace", () =>
+        ensureAgentWorkspace({
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
         }),
-  );
-  const workspaceDir = workspace.dir;
+      )
+    ).dir;
 
   if (
     !isFastTestEnv &&
@@ -460,42 +515,6 @@ export async function getReplyFromConfig(
     cfg,
     isFastTestEnv,
   });
-
-  const commandAuthorized = finalized.CommandAuthorized;
-  const sessionState = useFastTestBootstrap
-    ? initFastReplySessionState({
-        ctx: finalized,
-        cfg,
-        agentId,
-        commandAuthorized,
-        workspaceDir,
-      })
-    : await traceGetReplyPhase("reply.init_session_state", () =>
-        initSessionState({
-          ctx: finalized,
-          cfg,
-          commandAuthorized,
-        }),
-      );
-  const {
-    sessionCtx,
-    sessionEntry,
-    previousSessionEntry,
-    sessionStore,
-    sessionKey,
-    sessionId,
-    isNewSession,
-    resetTriggered,
-    systemSent,
-    storePath,
-    sessionScope,
-    groupResolution,
-    isGroup,
-    triggerBodyNormalized,
-    bodyStripped,
-  } = sessionState;
-  let { abortedLastRun } = sessionState;
-  resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
