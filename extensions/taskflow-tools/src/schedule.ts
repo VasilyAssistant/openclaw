@@ -151,7 +151,7 @@ function normalizeWeekdays(value: unknown): string {
     );
   });
   return Array.from(new Set(days))
-    .sort((left, right) => left - right)
+    .toSorted((left, right) => left - right)
     .join(",");
 }
 
