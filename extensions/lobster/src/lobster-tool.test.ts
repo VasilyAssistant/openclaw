@@ -617,6 +617,110 @@ describe("lobster managed workflow tool", () => {
     expect(task.parentFlowId).toBe("flow-1");
   });
 
+  it("runs the approved task side effect when a managed workflow is manually resumed", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [{ id: "task-1" }],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow({
+      runTask: vi.fn().mockImplementation((input: Record<string, unknown>) => ({
+        created: true,
+        flow: {
+          flowId: "flow-1",
+          revision: 4,
+          syncMode: "managed" as const,
+          controllerId: "tests/lobster",
+          ownerKey: "agent:main:main",
+          status: "running" as const,
+          goal: "Run Lobster workflow",
+        },
+        task: {
+          taskId: "task-1",
+          runtime: input.runtime,
+          sourceId: input.sourceId,
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session" as const,
+          parentFlowId: input.flowId,
+          runId: input.runId,
+          label: input.label,
+          task: input.task,
+          status: input.status ?? "queued",
+          deliveryStatus: input.deliveryStatus ?? "pending",
+          notifyPolicy: input.notifyPolicy ?? "done_only",
+          createdAt: 1,
+        },
+      })),
+    });
+    const tool = createLobsterManagedWorkflowTool(
+      managedApi({
+        approvalMode: "plugin-inline",
+        onApproved: {
+          type: "runTask",
+          runtime: "subagent",
+          taskTemplate: "Create task: {{title}}\n{{description}}",
+          labelTemplate: "{{title}}",
+          sourceIdTemplate: "source:{{idempotencyKey}}",
+          runIdTemplate: "run:{{idempotencyKey}}",
+          notifyPolicy: "state_changes",
+        },
+      }),
+      fakeCtx({ sandboxed: true }),
+      {
+        runner,
+        taskFlow,
+        idempotencyStore: new MemoryStore<any>(),
+      },
+    );
+
+    const res = await tool?.execute("call-managed-workflow-manual-resume", {
+      action: "resume",
+      workflowId: "task/create",
+      flowId: "flow-1",
+      flowExpectedRevision: 2,
+      approvalId: "lobster-approval-1",
+      approve: true,
+      idempotencyKey: "telegram:manual",
+      argsJson: '{"title":"Call client","description":"Bring agenda"}',
+    });
+
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "resume",
+      approvalId: "lobster-approval-1",
+      approve: true,
+      argsJson: '{"title":"Call client","description":"Bring agenda"}',
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    expect(taskFlow.runTask).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 3,
+      runtime: "subagent",
+      task: "Create task: Call client\nBring agenda",
+      status: "queued",
+      label: "Call client",
+      sourceId: "source:telegram:manual",
+      runId: "run:telegram:manual",
+      notifyPolicy: "state_changes",
+    });
+    expect(taskFlow.finish).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 4,
+    });
+    const details = requireRecord(res?.details, "manual managed workflow resume details");
+    expect(details.status).toBe("ok");
+    const sideEffect = requireRecord(details.sideEffect, "manual resume side effect");
+    expect(sideEffect.type).toBe("runTask");
+    const task = requireRecord(sideEffect.task, "manual resume child task");
+    expect(task.taskId).toBe("task-1");
+    expect(task.parentFlowId).toBe("flow-1");
+  });
+
   it("does not run an approved task side effect when Lobster resume is cancelled", async () => {
     const runner = {
       run: vi
