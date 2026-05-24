@@ -893,6 +893,9 @@ async function executeResume(params: {
   const token = readString(params.input.token);
   const approvalId = readString(params.input.approvalId);
   const approve = params.input.approve;
+  const idempotencyKey = readString(params.input.idempotencyKey);
+  const argsJson = readString(params.input.argsJson);
+  const args = parseJsonLike(argsJson, "argsJson");
   if (!flowId) {
     throw new Error("flowId required for Lobster managed workflow resume");
   }
@@ -915,10 +918,36 @@ async function executeResume(params: {
       action: "resume",
       ...(approvalId ? { approvalId } : { token: token as string }),
       approve,
+      ...(argsJson ? { argsJson } : {}),
       cwd: resolveLobsterCwd(workflow.cwd),
       timeoutMs: workflow.timeoutMs,
       maxStdoutBytes: workflow.maxStdoutBytes,
     },
+    ...(approve === true && workflow.approvedTask
+      ? {
+          beforeFinalize: ({ flow, envelope, expectedRevision }) => {
+            if (!envelope.ok || envelope.status !== "ok") {
+              return undefined;
+            }
+            return runApprovedTaskSideEffect({
+              taskFlow: params.taskFlow,
+              taskConfig: workflow.approvedTask as ApprovedTaskConfig,
+              flowId: flow.flowId,
+              expectedRevision,
+              ctx: params.ctx,
+              workflowId: params.workflowId,
+              ...(idempotencyKey ? { idempotencyKey } : {}),
+              ...(argsJson ? { argsJson } : {}),
+              ...(args !== undefined ? { args } : {}),
+              approval: {
+                status: "approved",
+                approvalRequestId: approvalId ?? token ?? "manual",
+                decision: "allow-once",
+              },
+            });
+          },
+        }
+      : {}),
   });
   return formatManagedFlowResult(result, { workflowId: params.workflowId });
 }
