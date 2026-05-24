@@ -6,22 +6,34 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
   TaskFlowRecord,
+  TaskFlowMutationResult,
+  ToolEnvelope,
 } from "./types.js";
 
-type ToolResult = Awaited<ReturnType<ReturnType<typeof createTaskFlowTools>[number]["execute"]>>;
-type ToolDetails = ToolResult["details"];
+type RawToolResult = Awaited<ReturnType<ReturnType<typeof createTaskFlowTools>[number]["execute"]>>;
+type ToolDetails = ToolEnvelope;
 
-function expectOk(result: ToolResult): Extract<ToolDetails, { ok: true }> {
-  const details = result.details;
-  expect(details.ok).toBe(true);
-  return details as Extract<ToolDetails, { ok: true }>;
+function toolDetails(result: RawToolResult): ToolDetails {
+  return (result as { details: ToolEnvelope }).details;
 }
 
-function expectError(result: ToolResult, code: string): Extract<ToolDetails, { ok: false }> {
-  const details = result.details;
+function expectOk(result: RawToolResult): Extract<ToolDetails, { ok: true }> {
+  const details = toolDetails(result);
+  if (!details.ok) {
+    throw new Error(`Expected successful tool result, got ${details.error.code}`);
+  }
+  expect(details.ok).toBe(true);
+  return details;
+}
+
+function expectError(result: RawToolResult, code: string): Extract<ToolDetails, { ok: false }> {
+  const details = toolDetails(result);
+  if (details.ok) {
+    throw new Error(`Expected failed tool result, got success from ${details.toolName}`);
+  }
   expect(details.ok).toBe(false);
-  expect((details as Extract<ToolDetails, { ok: false }>).error.code).toBe(code);
-  return details as Extract<ToolDetails, { ok: false }>;
+  expect(details.error.code).toBe(code);
+  return details;
 }
 
 function createKeyedStore() {
@@ -65,7 +77,7 @@ function createTaskFlowRuntime(): BoundTaskFlowRuntime {
     get: vi.fn((flowId) => flows.get(flowId)),
     list: vi.fn(() => Array.from(flows.values())),
     getTaskSummary: vi.fn(() => undefined),
-    requestCancel: vi.fn((params) => {
+    requestCancel: vi.fn((params): TaskFlowMutationResult => {
       const flow = flows.get(params.flowId);
       if (!flow) {
         return { applied: false, code: "not_found" as const };
@@ -142,7 +154,7 @@ function createHarness(
 
 describe("taskflow-tools trusted plugin", () => {
   it("exposes only the narrow TaskFlow and schedule wrappers", () => {
-    expect([...TASKFLOW_TOOL_NAMES].sort()).toEqual([
+    expect([...TASKFLOW_TOOL_NAMES].toSorted()).toEqual([
       "taskflow_create_managed",
       "taskflow_get_own",
       "taskflow_list_own",

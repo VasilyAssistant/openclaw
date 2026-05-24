@@ -1,4 +1,4 @@
-import type { JsonValue, TaskFlowRecord, TaskRegistrySummary } from "./types.js";
+import type { TaskFlowRecord, TaskRegistrySummary } from "./types.js";
 import { redactSecrets } from "./validation.js";
 
 export function sanitizeSummary(
@@ -33,10 +33,8 @@ export function sanitizeFlow(
     goal: flow.goal,
     ...(flow.currentStep ? { currentStep: flow.currentStep } : {}),
     ...(flow.blockedSummary ? { blockedSummary: flow.blockedSummary } : {}),
-    ...(flow.stateJson !== undefined
-      ? { stateJson: redactSecrets(flow.stateJson as JsonValue) }
-      : {}),
-    ...(flow.waitJson !== undefined ? { waitJson: redactSecrets(flow.waitJson as JsonValue) } : {}),
+    ...(flow.stateJson !== undefined ? { stateJson: redactSecrets(flow.stateJson) } : {}),
+    ...(flow.waitJson !== undefined ? { waitJson: redactSecrets(flow.waitJson) } : {}),
     ...(flow.cancelRequestedAt !== undefined ? { cancelRequestedAt: flow.cancelRequestedAt } : {}),
     createdAt: flow.createdAt,
     updatedAt: flow.updatedAt,

@@ -127,10 +127,7 @@ let gatewayCallerPromise: Promise<GatewayCaller | undefined> | undefined;
 function loadGatewayCaller(): Promise<GatewayCaller | undefined> {
   gatewayCallerPromise ??= (async () => {
     try {
-      const dynamicImport = new Function("specifier", "return import(specifier)") as (
-        specifier: string,
-      ) => Promise<{ callGatewayTool?: GatewayCaller }>;
-      const module = await dynamicImport("openclaw/plugin-sdk/agent-harness-runtime");
+      const module = await import("openclaw/plugin-sdk/agent-harness-runtime");
       return typeof module.callGatewayTool === "function" ? module.callGatewayTool : undefined;
     } catch {
       return undefined;
@@ -535,6 +532,7 @@ async function executeTool(params: {
       });
     }
   }
+  return failure("unknown_tool", "Unsupported TaskFlow tool.");
 }
 
 function isMutatingTool(toolName: ToolName): boolean {
