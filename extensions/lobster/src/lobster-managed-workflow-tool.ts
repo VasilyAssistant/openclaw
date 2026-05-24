@@ -1141,7 +1141,7 @@ async function executeResume(params: {
       timeoutMs: workflow.timeoutMs,
       maxStdoutBytes: workflow.maxStdoutBytes,
     },
-    ...(approve === true && workflow.approvedTask
+    ...(approve && workflow.approvedTask
       ? {
           beforeFinalize: ({ flow, envelope, expectedRevision }) => {
             if (!envelope.ok || envelope.status !== "ok") {
