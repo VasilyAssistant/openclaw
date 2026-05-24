@@ -53,6 +53,7 @@ import {
   buildSandboxEnv,
   clampWithDefault,
   coerceEnv,
+  isContainerWorkspaceWorkdir,
   readEnvInt,
   resolveSandboxWorkdir,
   resolveWorkdir,
@@ -1441,7 +1442,16 @@ export function createExecTool(
         // Passing undefined lets the node use its own default working directory.
         workdir = explicitWorkdir;
       } else {
-        const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
+        const inheritedGatewayWorkdir =
+          defaultWorkdir &&
+          defaults?.sandbox &&
+          isContainerWorkspaceWorkdir({
+            workdir: defaultWorkdir,
+            containerWorkdir: defaults.sandbox.containerWorkdir,
+          })
+            ? undefined
+            : defaultWorkdir;
+        const rawWorkdir = explicitWorkdir ?? inheritedGatewayWorkdir ?? process.cwd();
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
       rejectUnsafeControlShellCommand(params.command);
