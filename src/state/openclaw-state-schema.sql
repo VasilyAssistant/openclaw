@@ -996,6 +996,12 @@ CREATE TABLE IF NOT EXISTS task_runs (
   parent_task_id TEXT,
   agent_id TEXT,
   run_id TEXT,
+  task_name TEXT,
+  idempotency_key TEXT,
+  idempotency_payload_hash TEXT,
+  project_key TEXT,
+  controller_id TEXT,
+  attempt INTEGER,
   label TEXT,
   task TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -1020,6 +1026,9 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_a
 CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
+CREATE INDEX IF NOT EXISTS idx_task_runs_flow_idempotency ON task_runs(parent_flow_id, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_task_runs_flow_task_name ON task_runs(parent_flow_id, task_name);
+CREATE INDEX IF NOT EXISTS idx_task_runs_project_key ON task_runs(project_key);
 
 CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,

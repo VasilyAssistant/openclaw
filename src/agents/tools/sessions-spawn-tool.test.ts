@@ -383,6 +383,59 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.taskName).toBe("review-subagents");
   });
 
+  it("passes flowLink to subagent spawns with an internal payload hash", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, { properties?: Record<string, unknown>; type?: string }>;
+    };
+
+    expect(requireSchemaProperty(schema.properties, "flowLink").type).toBe("object");
+
+    await tool.execute("call-flow-link", {
+      task: "review subagent handling",
+      taskName: "review_subagents",
+      flowLink: {
+        flowId: "flow-123",
+        expectedRevision: 7,
+        taskName: "review_subagents",
+        idempotencyKey: "project:review_subagents:v1",
+        projectKey: "project",
+        controllerId: "controller",
+      },
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    const flowLink = requireRecord(spawnArgs.flowLink, "spawn flowLink");
+    expect(flowLink.flowId).toBe("flow-123");
+    expect(flowLink.expectedRevision).toBe(7);
+    expect(flowLink.taskName).toBe("review_subagents");
+    expect(flowLink.idempotencyKey).toBe("project:review_subagents:v1");
+    expect(flowLink.projectKey).toBe("project");
+    expect(flowLink.controllerId).toBe("controller");
+    expect(flowLink.idempotencyPayloadHash).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("rejects mismatched top-level and flowLink task names", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-flow-link-task-mismatch", {
+        task: "review subagent handling",
+        taskName: "review_subagents",
+        flowLink: {
+          flowId: "flow-123",
+          taskName: "other_task",
+          idempotencyKey: "project:review_subagents:v1",
+        },
+      }),
+    ).rejects.toThrow("flowLink.taskName must match taskName");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
   it("accepts underscore taskName aliases", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

@@ -18,7 +18,11 @@ import {
   createQueuedTaskRun as createQueuedTaskRunOrNull,
   createRunningTaskRun as createRunningTaskRunOrNull,
   failTaskRunByRunId,
+  failLinkedTaskSpawn,
+  finalizeLinkedTaskSpawn,
+  findLinkedTaskByIdempotencyForOwner,
   recordTaskRunProgressByRunId,
+  reserveLinkedTaskInFlowForOwner,
   retryBlockedFlowAsQueuedTaskRun,
   runTaskInFlow,
   runTaskInFlowForOwner,
@@ -223,6 +227,127 @@ describe("task-executor", () => {
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
+  });
+
+  it("reserves linked flow tasks idempotently before child spawn", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/linked-spawn",
+        goal: "Spawn linked child",
+      });
+
+      const first = reserveLinkedTaskInFlowForOwner({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        callerOwnerKey: "agent:main:main",
+        runtime: "subagent",
+        sourceId: "linked-spawn:stable",
+        childSessionKey: "agent:main:subagent:linked",
+        runId: "linked-spawn:stable",
+        taskName: "research_notes",
+        idempotencyKey: "project:research_notes:v1",
+        idempotencyPayloadHash: "sha256:first",
+        projectKey: "project",
+        controllerId: "tests",
+        task: "Research notes",
+        deliveryStatus: "pending",
+      });
+
+      expect(first.found).toBe(true);
+      expect(first.reserved).toBe(true);
+      expect(first.created).toBe(true);
+      expect(first.task?.parentFlowId).toBe(flow.flowId);
+      expect(first.task?.taskName).toBe("research_notes");
+      expect(first.task?.idempotencyKey).toBe("project:research_notes:v1");
+      expect(first.task?.idempotencyPayloadHash).toBe("sha256:first");
+      expect(first.task?.projectKey).toBe("project");
+      expect(first.task?.status).toBe("queued");
+
+      const retry = reserveLinkedTaskInFlowForOwner({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision - 1,
+        callerOwnerKey: "agent:main:main",
+        runtime: "subagent",
+        sourceId: "linked-spawn:other",
+        childSessionKey: "agent:main:subagent:other",
+        runId: "linked-spawn:other",
+        taskName: "research_notes",
+        idempotencyKey: "project:research_notes:v1",
+        idempotencyPayloadHash: "sha256:first",
+        projectKey: "project",
+        task: "Research notes changed only by retry metadata",
+      });
+
+      expect(retry.found).toBe(true);
+      expect(retry.reserved).toBe(true);
+      expect(retry.created).toBe(false);
+      expect(retry.task?.taskId).toBe(first.task?.taskId);
+      expect(retry.task?.childSessionKey).toBe("agent:main:subagent:linked");
+      expect(retry.task?.runId).toBe("linked-spawn:stable");
+
+      const conflict = findLinkedTaskByIdempotencyForOwner({
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:main",
+        idempotencyKey: "project:research_notes:v1",
+        idempotencyPayloadHash: "sha256:different",
+      });
+
+      expect(conflict.found).toBe(true);
+      expect(conflict.conflict).toBe(true);
+      expect(conflict.task?.taskId).toBe(first.task?.taskId);
+    });
+  });
+
+  it("finalizes and fails linked spawn reservations by task id", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/linked-spawn-finalize",
+        goal: "Finalize linked child",
+      });
+      const reservation = reserveLinkedTaskInFlowForOwner({
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:main",
+        runtime: "subagent",
+        sourceId: "linked-spawn:stable",
+        childSessionKey: "agent:main:subagent:linked",
+        runId: "linked-spawn:stable",
+        idempotencyKey: "project:linked:v1",
+        idempotencyPayloadHash: "sha256:linked",
+        task: "Linked child",
+      });
+      const taskId = reservation.task?.taskId;
+      if (!taskId) {
+        throw new Error("Expected linked task reservation");
+      }
+
+      const finalized = finalizeLinkedTaskSpawn({
+        taskId,
+        runId: "run-linked-actual",
+        sourceId: "linked-spawn:stable",
+        childSessionKey: "agent:main:subagent:linked",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+
+      expect(finalized.found).toBe(true);
+      expect(finalized.finalized).toBe(true);
+      expect(finalized.task?.status).toBe("running");
+      expect(finalized.task?.runId).toBe("run-linked-actual");
+      expect(findTaskByRunId("run-linked-actual")?.taskId).toBe(taskId);
+
+      const failedAfterRunning = failLinkedTaskSpawn({
+        taskId,
+        endedAt: 200,
+        error: "spawn registration failed",
+      });
+
+      expect(failedAfterRunning.found).toBe(true);
+      expect(failedAfterRunning.finalized).toBe(true);
+      expect(failedAfterRunning.task?.status).toBe("failed");
+      expect(failedAfterRunning.task?.error).toBe("spawn registration failed");
+    });
   });
 
   it("advances a queued run through start and completion", async () => {

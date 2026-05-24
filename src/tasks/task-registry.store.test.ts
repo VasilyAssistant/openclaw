@@ -581,6 +581,43 @@ describe("task-registry store runtime", () => {
     });
   });
 
+  it("persists linked task metadata with task rows", () => {
+    const flow = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/task-store-linked-metadata",
+      goal: "Persist linked task metadata",
+    });
+    const created = createTaskRecord({
+      runtime: "subagent",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      parentFlowId: flow.flowId,
+      childSessionKey: "agent:codex:subagent:linked",
+      runId: "run-flow-linked-metadata",
+      taskName: "draft_report",
+      idempotencyKey: "project:draft_report:v1",
+      idempotencyPayloadHash: "sha256:payload",
+      projectKey: "project",
+      controllerId: "tests",
+      attempt: 2,
+      task: "Linked task with metadata",
+      status: "queued",
+      deliveryStatus: "pending",
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+
+    const restored = findTaskByRunId("run-flow-linked-metadata");
+    expect(restored?.taskId).toBe(created.taskId);
+    expect(restored?.parentFlowId).toBe(flow.flowId);
+    expect(restored?.taskName).toBe("draft_report");
+    expect(restored?.idempotencyKey).toBe("project:draft_report:v1");
+    expect(restored?.idempotencyPayloadHash).toBe("sha256:payload");
+    expect(restored?.projectKey).toBe("project");
+    expect(restored?.controllerId).toBe("tests");
+    expect(restored?.attempt).toBe(2);
+  });
+
   it("preserves requesterSessionKey when it differs from ownerKey across sqlite restore", () => {
     const created = createTaskRecord({
       runtime: "cli",

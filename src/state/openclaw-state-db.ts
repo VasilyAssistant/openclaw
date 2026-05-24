@@ -855,6 +855,13 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  // Linked TaskFlow subagent spawns (Vasily): reserve/finalize idempotency columns.
+  ensureColumn(db, "task_runs", "task_name TEXT");
+  ensureColumn(db, "task_runs", "idempotency_key TEXT");
+  ensureColumn(db, "task_runs", "idempotency_payload_hash TEXT");
+  ensureColumn(db, "task_runs", "project_key TEXT");
+  ensureColumn(db, "task_runs", "controller_id TEXT");
+  ensureColumn(db, "task_runs", "attempt INTEGER");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {

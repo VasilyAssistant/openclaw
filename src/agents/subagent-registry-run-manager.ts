@@ -9,6 +9,7 @@ import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
+import { finalizeLinkedTaskSpawn } from "../tasks/task-executor.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
@@ -158,6 +159,10 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  linkedTask?: {
+    taskId: string;
+    flowId?: string;
+  };
 };
 
 export function createSubagentRunManager(params: {
@@ -676,32 +681,53 @@ export function createSubagentRunManager(params: {
       params.runs.delete(runId);
       throw error;
     }
-    try {
-      const task = createRunningTaskRun({
-        runtime: "subagent",
+    if (registerParams.linkedTask?.taskId.trim()) {
+      const finalized = finalizeLinkedTaskSpawn({
+        taskId: registerParams.linkedTask.taskId,
         sourceId: runId,
-        ownerKey: requesterSessionKey,
-        scopeKind: "session",
-        requesterOrigin,
         childSessionKey,
         runId,
-        label: registerParams.label,
-        task: registerParams.task,
-        deliveryStatus:
-          registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
         startedAt: now,
         lastEventAt: now,
+        deliveryStatus:
+          registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
       });
-      if (!task) {
-        log.warn("Failed to persist background task for subagent run", {
+      if (!finalized.finalized) {
+        log.warn("Failed to finalize linked background task for subagent run", {
           runId: registerParams.runId,
+          taskId: registerParams.linkedTask.taskId,
+          flowId: registerParams.linkedTask.flowId,
+          reason: finalized.reason,
         });
       }
-    } catch (error) {
-      log.warn("Failed to create background task for subagent run", {
-        runId: registerParams.runId,
-        error,
-      });
+    } else {
+      try {
+        const task = createRunningTaskRun({
+          runtime: "subagent",
+          sourceId: runId,
+          ownerKey: requesterSessionKey,
+          scopeKind: "session",
+          requesterOrigin,
+          childSessionKey,
+          runId,
+          label: registerParams.label,
+          task: registerParams.task,
+          deliveryStatus:
+            registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+          startedAt: now,
+          lastEventAt: now,
+        });
+        if (!task) {
+          log.warn("Failed to persist background task for subagent run", {
+            runId: registerParams.runId,
+          });
+        }
+      } catch (error) {
+        log.warn("Failed to create background task for subagent run", {
+          runId: registerParams.runId,
+          error,
+        });
+      }
     }
     params.ensureListener();
     params.persist();

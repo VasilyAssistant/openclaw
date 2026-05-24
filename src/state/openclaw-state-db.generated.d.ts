@@ -836,12 +836,16 @@ export interface TaskDeliveryState {
 
 export interface TaskRuns {
   agent_id: string | null;
+  attempt: number | null;
   child_session_key: string | null;
   cleanup_after: number | null;
+  controller_id: string | null;
   created_at: number;
   delivery_status: string;
   ended_at: number | null;
   error: string | null;
+  idempotency_key: string | null;
+  idempotency_payload_hash: string | null;
   label: string | null;
   last_event_at: number | null;
   notify_policy: string;
@@ -849,6 +853,7 @@ export interface TaskRuns {
   parent_flow_id: string | null;
   parent_task_id: string | null;
   progress_summary: string | null;
+  project_key: string | null;
   requester_session_key: string | null;
   run_id: string | null;
   runtime: string;
@@ -859,6 +864,7 @@ export interface TaskRuns {
   task: string;
   task_id: string;
   task_kind: string | null;
+  task_name: string | null;
   terminal_outcome: string | null;
   terminal_summary: string | null;
 }

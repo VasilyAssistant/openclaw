@@ -58,6 +58,12 @@ const TASK_RUN_SELECT_COLUMNS = [
   "parent_task_id",
   "agent_id",
   "run_id",
+  "task_name",
+  "idempotency_key",
+  "idempotency_payload_hash",
+  "project_key",
+  "controller_id",
+  "attempt",
   "label",
   "task",
   "status",
@@ -92,6 +98,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const endedAt = normalizeNumber(row.ended_at);
   const lastEventAt = normalizeNumber(row.last_event_at);
   const cleanupAfter = normalizeNumber(row.cleanup_after);
+  const attempt = normalizeNumber(row.attempt);
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
   // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
@@ -110,6 +117,14 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.parent_task_id ? { parentTaskId: row.parent_task_id } : {}),
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
     ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.task_name ? { taskName: row.task_name } : {}),
+    ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
+    ...(row.idempotency_payload_hash
+      ? { idempotencyPayloadHash: row.idempotency_payload_hash }
+      : {}),
+    ...(row.project_key ? { projectKey: row.project_key } : {}),
+    ...(row.controller_id ? { controllerId: row.controller_id } : {}),
+    ...(attempt != null ? { attempt } : {}),
     ...(row.label ? { label: row.label } : {}),
     task: row.task,
     status: parseTaskStatus(row.status),
@@ -151,6 +166,12 @@ function bindTaskRecordBase(record: TaskRecord): Insertable<TaskRunsTable> {
     parent_task_id: record.parentTaskId ?? null,
     agent_id: record.agentId ?? null,
     run_id: record.runId ?? null,
+    task_name: record.taskName ?? null,
+    idempotency_key: record.idempotencyKey ?? null,
+    idempotency_payload_hash: record.idempotencyPayloadHash ?? null,
+    project_key: record.projectKey ?? null,
+    controller_id: record.controllerId ?? null,
+    attempt: record.attempt ?? null,
     label: record.label ?? null,
     task: record.task,
     status: record.status,
@@ -239,6 +260,12 @@ function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {
           parent_task_id: (eb) => eb.ref("excluded.parent_task_id"),
           agent_id: (eb) => eb.ref("excluded.agent_id"),
           run_id: (eb) => eb.ref("excluded.run_id"),
+          task_name: (eb) => eb.ref("excluded.task_name"),
+          idempotency_key: (eb) => eb.ref("excluded.idempotency_key"),
+          idempotency_payload_hash: (eb) => eb.ref("excluded.idempotency_payload_hash"),
+          project_key: (eb) => eb.ref("excluded.project_key"),
+          controller_id: (eb) => eb.ref("excluded.controller_id"),
+          attempt: (eb) => eb.ref("excluded.attempt"),
           label: (eb) => eb.ref("excluded.label"),
           task: (eb) => eb.ref("excluded.task"),
           status: (eb) => eb.ref("excluded.status"),

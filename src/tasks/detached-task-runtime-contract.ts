@@ -24,6 +24,12 @@ export type DetachedTaskCreateParams = {
   parentTaskId?: string;
   agentId?: string;
   runId?: string;
+  taskName?: string;
+  idempotencyKey?: string;
+  idempotencyPayloadHash?: string;
+  projectKey?: string;
+  controllerId?: string;
+  attempt?: number;
   label?: string;
   task: string;
   preferMetadata?: boolean;
