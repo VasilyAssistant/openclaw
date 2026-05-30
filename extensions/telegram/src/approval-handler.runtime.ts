@@ -5,8 +5,8 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
+  buildApprovalPresentation,
   buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -18,6 +18,7 @@ import type {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramInlineButtons } from "./button-types.js";
+import { buildTelegramPluginApprovalPendingPayload } from "./exec-approval-forwarding.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
@@ -68,7 +69,7 @@ function buildPendingPayload(params: {
 }): TelegramPendingDelivery {
   const payload =
     params.approvalKind === "plugin"
-      ? buildPluginApprovalPendingReplyPayload({
+      ? buildTelegramPluginApprovalPendingPayload({
           request: params.request as PluginApprovalRequest,
           nowMs: params.nowMs,
         })
@@ -90,11 +91,22 @@ function buildPendingPayload(params: {
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
         } satisfies ExecApprovalPendingReplyParams);
+  // Plugin approvals render only decision actions as inline buttons, carrying canonical
+  // /approve callbacks. Command-kind actions are arbitrary plugin slash commands; they stay
+  // as text in payload.text so the channel never encodes a raw command string as an approve
+  // callback. Exec approvals expose only decision actions, so map them directly.
+  const buttonPresentation =
+    params.approvalKind === "plugin"
+      ? buildApprovalPresentation({
+          approvalId: params.request.id,
+          allowedDecisions: params.view.actions
+            .filter((action) => action.kind !== "command")
+            .map((action) => action.decision),
+        })
+      : buildApprovalPresentationFromActionDescriptors(params.view.actions);
   return {
     text: payload.text ?? "",
-    buttons: resolveTelegramInlineButtons({
-      presentation: buildApprovalPresentationFromActionDescriptors(params.view.actions),
-    }),
+    buttons: resolveTelegramInlineButtons({ presentation: buttonPresentation }),
   };
 }
 
