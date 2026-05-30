@@ -52,7 +52,10 @@ import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
 } from "./directory-config.js";
-import { buildTelegramExecApprovalPendingPayload } from "./exec-approval-forwarding.js";
+import {
+  buildTelegramExecApprovalPendingPayload,
+  buildTelegramPluginApprovalPendingPayload,
+} from "./exec-approval-forwarding.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveTelegramGroupRequireMention,
@@ -820,6 +823,10 @@ export const telegramPlugin = createChatChannelPlugin({
         exec: {
           buildPendingPayload: ({ request, nowMs }) =>
             buildTelegramExecApprovalPendingPayload({ request, nowMs }),
+        },
+        plugin: {
+          buildPendingPayload: ({ request, nowMs }) =>
+            buildTelegramPluginApprovalPendingPayload({ request, nowMs }),
         },
       },
     },
