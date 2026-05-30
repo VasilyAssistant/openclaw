@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTaskFlowTools, TASKFLOW_TOOL_NAMES } from "../index.js";
 import type {
+  BoundTaskFlowDetailsRuntime,
   BoundTaskFlowRuntime,
   GatewayCaller,
   OpenClawPluginApi,
@@ -97,16 +98,24 @@ function createTaskFlowRuntime(): BoundTaskFlowRuntime {
   };
 }
 
+function createTaskFlowDetailsRuntime(): BoundTaskFlowDetailsRuntime {
+  return {
+    get: vi.fn(() => undefined),
+  };
+}
+
 function createHarness(
   options: {
     pluginConfig?: Record<string, unknown>;
     approvalDecision?: "allow-once" | "deny";
     taskFlow?: BoundTaskFlowRuntime;
+    taskFlowDetails?: BoundTaskFlowDetailsRuntime;
     gatewayCaller?: GatewayCaller;
     nowMs?: () => number;
   } = {},
 ) {
   const taskFlow = options.taskFlow ?? createTaskFlowRuntime();
+  const taskFlowDetails = options.taskFlowDetails ?? createTaskFlowDetailsRuntime();
   const keyedStore = createKeyedStore();
   const requestApproval = vi.fn(async () => ({ id: "approval-1" }));
   const waitApprovalDecision = vi.fn(async () => ({
@@ -119,6 +128,9 @@ function createHarness(
       tasks: {
         managedFlows: {
           fromToolContext: vi.fn(() => taskFlow),
+        },
+        flows: {
+          fromToolContext: vi.fn(() => taskFlowDetails),
         },
       },
       state: {
@@ -149,7 +161,16 @@ function createHarness(
       callGatewayTool: options.gatewayCaller,
     }).map((tool) => [tool.name, tool]),
   );
-  return { api, ctx, taskFlow, keyedStore, requestApproval, waitApprovalDecision, tools };
+  return {
+    api,
+    ctx,
+    taskFlow,
+    taskFlowDetails,
+    keyedStore,
+    requestApproval,
+    waitApprovalDecision,
+    tools,
+  };
 }
 
 describe("taskflow-tools trusted plugin", () => {
@@ -202,6 +223,59 @@ describe("taskflow-tools trusted plugin", () => {
 
     const got = expectOk(await harness.tools.taskflow_get_own.execute("get-1", { flowId }));
     expect(got.flowId).toBe(flowId);
+  });
+
+  it("includes sanitized linked task details on get results when runtime details are available", async () => {
+    const harness = createHarness();
+    const created = expectOk(
+      await harness.tools.taskflow_create_managed.execute("create-detail", {
+        goal: "Track linked child",
+        idempotencyKey: "detail-flow",
+      }),
+    );
+    vi.mocked(harness.taskFlowDetails.get).mockReturnValue({
+      tasks: [
+        {
+          id: "task-1",
+          runtime: "subagent",
+          sourceId: "linked-spawn:stable",
+          sessionKey: "session-owner-1",
+          ownerKey: "session-owner-1",
+          scope: "session",
+          childSessionKey: "agent:main:subagent:child",
+          flowId: created.flowId ?? "",
+          agentId: "main",
+          runId: "linked-run-1",
+          taskName: "flowlink_smoke_child",
+          label: "FlowLink smoke child",
+          title: "Run linked child",
+          status: "succeeded",
+          deliveryStatus: "delivered",
+          notifyPolicy: "state_changes",
+          createdAt: 1_000,
+          endedAt: 2_000,
+          terminalSummary: "FLOWLINK_CHILD_OK",
+        },
+      ],
+    });
+
+    const got = expectOk(
+      await harness.tools.taskflow_get_own.execute("get-detail", { flowId: created.flowId }),
+    );
+    const flow = (got.result as { flow: { tasks?: Array<Record<string, unknown>> } }).flow;
+
+    expect(flow.tasks).toEqual([
+      expect.objectContaining({
+        id: "task-1",
+        runtime: "subagent",
+        flowId: created.flowId,
+        childSessionKey: "agent:main:subagent:child",
+        runId: "linked-run-1",
+        taskName: "flowlink_smoke_child",
+        label: "FlowLink smoke child",
+        status: "succeeded",
+      }),
+    ]);
   });
 
   it("does not create a flow when approval is denied", async () => {

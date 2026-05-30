@@ -6,6 +6,7 @@ import type {
   AgentToolResult,
   AnyAgentTool,
   ApprovalRequestResult,
+  BoundTaskFlowDetailsRuntime,
   BoundTaskFlowRuntime,
   GatewayCaller,
   OpenClawPluginApi,
@@ -201,6 +202,17 @@ function bindTaskFlow(
   return taskFlow as unknown as BoundTaskFlowRuntime;
 }
 
+function bindTaskFlowDetails(
+  api: OpenClawPluginApi,
+  ctx: OpenClawPluginToolContext,
+): BoundTaskFlowDetailsRuntime | undefined {
+  return api.runtime?.tasks?.flows?.fromToolContext(ctx);
+}
+
+function getTaskDetails(taskFlowDetails: BoundTaskFlowDetailsRuntime | undefined, flowId: string) {
+  return taskFlowDetails?.get(flowId)?.tasks;
+}
+
 function requireManagedFlow(taskFlow: BoundTaskFlowRuntime, flowId: string): TaskFlowRecord {
   const flow = taskFlow.get(flowId);
   if (!flow || flow.syncMode !== "managed") {
@@ -376,6 +388,7 @@ async function executeTool(params: {
 }): Promise<ToolEnvelope> {
   assertNoForbiddenArgs(params.input);
   const taskFlow = bindTaskFlow(params.api, params.ctx);
+  const taskFlowDetails = bindTaskFlowDetails(params.api, params.ctx);
   const cfg = parseConfig(params.api.pluginConfig);
   switch (params.toolName) {
     case "taskflow_create_managed": {
@@ -414,7 +427,13 @@ async function executeTool(params: {
             toolName: params.toolName,
             flowId: flow.flowId,
             revision: flow.revision,
-            result: { flow: sanitizeFlow(flow, taskFlow.getTaskSummary(flow.flowId)) },
+            result: {
+              flow: sanitizeFlow(
+                flow,
+                taskFlow.getTaskSummary(flow.flowId),
+                getTaskDetails(taskFlowDetails, flow.flowId),
+              ),
+            },
           });
         },
       });
@@ -435,7 +454,13 @@ async function executeTool(params: {
         toolName: params.toolName,
         flowId: flow.flowId,
         revision: flow.revision,
-        result: { flow: sanitizeFlow(flow, taskFlow.getTaskSummary(flow.flowId)) },
+        result: {
+          flow: sanitizeFlow(
+            flow,
+            taskFlow.getTaskSummary(flow.flowId),
+            getTaskDetails(taskFlowDetails, flow.flowId),
+          ),
+        },
       });
     }
     case "taskflow_request_cancel": {
@@ -455,7 +480,13 @@ async function executeTool(params: {
               flowId: flow.flowId,
               revision: flow.revision,
               idempotent: true,
-              result: { flow: sanitizeFlow(flow, taskFlow.getTaskSummary(flow.flowId)) },
+              result: {
+                flow: sanitizeFlow(
+                  flow,
+                  taskFlow.getTaskSummary(flow.flowId),
+                  getTaskDetails(taskFlowDetails, flow.flowId),
+                ),
+              },
             });
           }
           assertExpectedRevision(flow, normalized.expectedRevision);
@@ -486,7 +517,11 @@ async function executeTool(params: {
             flowId: cancelled.flow.flowId,
             revision: cancelled.flow.revision,
             result: {
-              flow: sanitizeFlow(cancelled.flow, taskFlow.getTaskSummary(cancelled.flow.flowId)),
+              flow: sanitizeFlow(
+                cancelled.flow,
+                taskFlow.getTaskSummary(cancelled.flow.flowId),
+                getTaskDetails(taskFlowDetails, cancelled.flow.flowId),
+              ),
             },
           });
         },

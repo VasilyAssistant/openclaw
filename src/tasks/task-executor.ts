@@ -607,7 +607,8 @@ export function findLinkedTaskByIdempotencyForOwner(params: {
       conflict: true,
       flow,
       task: existing,
-      reason: "Linked task idempotency payload conflict.",
+      reason:
+        "Linked task idempotency payload conflict: this flowLink.idempotencyKey is already bound to a different sessions_spawn payload. Reuse the exact same task and spawn parameters to retry the existing child, or choose a new flowLink.idempotencyKey for different work.",
     };
   }
   return {

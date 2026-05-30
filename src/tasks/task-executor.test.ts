@@ -296,6 +296,7 @@ describe("task-executor", () => {
       expect(conflict.found).toBe(true);
       expect(conflict.conflict).toBe(true);
       expect(conflict.task?.taskId).toBe(first.task?.taskId);
+      expect(conflict.reason).toContain("Reuse the exact same task and spawn parameters");
     });
   });
 

@@ -35,6 +35,7 @@ export type TaskRunView = {
   parentTaskId?: string;
   agentId?: string;
   runId?: string;
+  taskName?: string;
   label?: string;
   title: string;
   status: TaskStatus;

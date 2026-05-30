@@ -35,6 +35,35 @@ export type TaskRegistrySummary = {
   byRuntime?: Record<string, number>;
 };
 
+type TaskRunStringField =
+  | "sourceId"
+  | "sessionKey"
+  | "ownerKey"
+  | "scope"
+  | "childSessionKey"
+  | "flowId"
+  | "parentTaskId"
+  | "agentId"
+  | "runId"
+  | "taskName"
+  | "label"
+  | "deliveryStatus"
+  | "notifyPolicy"
+  | "error"
+  | "progressSummary"
+  | "terminalSummary"
+  | "terminalOutcome";
+
+type TaskRunNumberField = "createdAt" | "startedAt" | "endedAt" | "lastEventAt" | "cleanupAfter";
+
+export type TaskRunView = {
+  id: string;
+  runtime: string;
+  title: string;
+  status: string;
+} & Partial<Record<TaskRunStringField, string>> &
+  Partial<Record<TaskRunNumberField, number>>;
+
 export type TaskFlowRecord = {
   flowId: string;
   syncMode: "managed" | "task_mirrored";
@@ -80,6 +109,10 @@ export type BoundTaskFlowRuntime = {
     expectedRevision: number;
     cancelRequestedAt?: number;
   }): TaskFlowMutationResult;
+};
+
+export type BoundTaskFlowDetailsRuntime = {
+  get(flowId: string): { tasks?: TaskRunView[] } | undefined;
 };
 
 export type PluginStateKeyedStore<T> = {
