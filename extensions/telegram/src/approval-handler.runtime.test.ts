@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import { buildTelegramPluginApprovalPendingPayload } from "./exec-approval-forwarding.js";
 
 type TelegramPayload = {
   text: string;
@@ -48,6 +49,86 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(payload.text).toContain("/approve req-1 allow-once");
     expect(payload.text).not.toContain("allow-always");
     expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+  });
+
+  it("renders plugin approvals with buttons instead of manual approve commands", async () => {
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Cancel managed TaskFlow",
+          description: "Request cancellation for TaskFlow flow-1.",
+          pluginId: "taskflow-tools",
+          toolName: "taskflow_request_cancel",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 120_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        approvalId: "plugin:req-1",
+        phase: "pending",
+        title: "Cancel managed TaskFlow",
+        description: "Request cancellation for TaskFlow flow-1.",
+        metadata: [],
+        severity: "warning",
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve plugin:req-1 allow-once",
+            style: "success",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve plugin:req-1 deny",
+            style: "danger",
+          },
+        ],
+        expiresAtMs: 120_000,
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain("Cancel managed TaskFlow");
+    expect(payload.text).toContain("taskflow_request_cancel");
+    expect(payload.text).not.toContain("/approve");
+    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+  });
+
+  it("builds forwarded plugin approval payloads with button presentation", () => {
+    const payload = buildTelegramPluginApprovalPendingPayload({
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Cancel managed TaskFlow",
+          description: "Request cancellation for TaskFlow flow-1.",
+          pluginId: "taskflow-tools",
+          toolName: "taskflow_request_cancel",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 120_000,
+      },
+      nowMs: 0,
+    });
+    const block = payload.presentation?.blocks[0];
+
+    expect(payload.text).toContain("Use the approval buttons below.");
+    expect(payload.text).not.toContain("/approve");
+    expect(block?.type).toBe("buttons");
+    expect(block?.type === "buttons" ? block.buttons.map((button) => button.label) : []).toEqual([
+      "Allow Once",
+      "Deny",
+    ]);
   });
 
   it("passes topic thread ids to typing and message delivery", async () => {

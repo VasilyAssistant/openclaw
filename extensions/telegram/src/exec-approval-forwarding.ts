@@ -1,9 +1,13 @@
 import {
   buildExecApprovalPendingReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
   resolveExecApprovalRequestAllowedDecisions,
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { ExecApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { isTelegramExecApprovalClientEnabled } from "./exec-approvals.js";
@@ -42,5 +46,43 @@ export function buildTelegramExecApprovalPendingPayload(params: {
     allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
+  });
+}
+
+function formatTelegramApprovalExpiresIn(expiresAtMs: number, nowMs: number): string {
+  return `${Math.max(0, Math.round((expiresAtMs - nowMs) / 1000))}s`;
+}
+
+function buildTelegramPluginApprovalText(request: PluginApprovalRequest, nowMs: number): string {
+  const severity = request.request.severity ?? "warning";
+  const icon = severity === "critical" ? "🚨" : severity === "info" ? "ℹ️" : "🛡️";
+  const lines = [
+    `${icon} Plugin approval required`,
+    `Title: ${request.request.title}`,
+    `Description: ${request.request.description}`,
+  ];
+  if (request.request.toolName) {
+    lines.push(`Tool: ${request.request.toolName}`);
+  }
+  if (request.request.pluginId) {
+    lines.push(`Plugin: ${request.request.pluginId}`);
+  }
+  if (request.request.agentId) {
+    lines.push(`Agent: ${request.request.agentId}`);
+  }
+  lines.push(`ID: ${request.id}`);
+  lines.push(`Expires in: ${formatTelegramApprovalExpiresIn(request.expiresAtMs, nowMs)}`);
+  lines.push("Use the approval buttons below.");
+  return lines.join("\n");
+}
+
+export function buildTelegramPluginApprovalPendingPayload(params: {
+  request: PluginApprovalRequest;
+  nowMs: number;
+}) {
+  return buildPluginApprovalPendingReplyPayload({
+    request: params.request,
+    nowMs: params.nowMs,
+    text: buildTelegramPluginApprovalText(params.request, params.nowMs),
   });
 }

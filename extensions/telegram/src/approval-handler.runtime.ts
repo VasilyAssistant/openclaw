@@ -4,7 +4,6 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
@@ -17,6 +16,7 @@ import type {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramInlineButtons } from "./button-types.js";
+import { buildTelegramPluginApprovalPendingPayload } from "./exec-approval-forwarding.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
@@ -67,7 +67,7 @@ function buildPendingPayload(params: {
 }): TelegramPendingDelivery {
   const payload =
     params.approvalKind === "plugin"
-      ? buildPluginApprovalPendingReplyPayload({
+      ? buildTelegramPluginApprovalPendingPayload({
           request: params.request as PluginApprovalRequest,
           nowMs: params.nowMs,
         })
