@@ -111,6 +111,7 @@ function createHarness(
     taskFlow?: BoundTaskFlowRuntime;
     taskFlowDetails?: BoundTaskFlowDetailsRuntime;
     gatewayCaller?: GatewayCaller;
+    approvalViaGateway?: boolean;
     nowMs?: () => number;
   } = {},
 ) {
@@ -154,12 +155,21 @@ function createHarness(
     },
   } as unknown as OpenClawPluginToolContext;
   const tools = Object.fromEntries(
-    createTaskFlowTools(api, ctx, {
-      nowMs: options.nowMs,
-      requestApproval,
-      waitApprovalDecision,
-      callGatewayTool: options.gatewayCaller,
-    }).map((tool) => [tool.name, tool]),
+    createTaskFlowTools(
+      api,
+      ctx,
+      options.approvalViaGateway
+        ? {
+            nowMs: options.nowMs,
+            callGatewayTool: options.gatewayCaller,
+          }
+        : {
+            nowMs: options.nowMs,
+            requestApproval,
+            waitApprovalDecision,
+            callGatewayTool: options.gatewayCaller,
+          },
+    ).map((tool) => [tool.name, tool]),
   );
   return {
     api,
@@ -223,6 +233,47 @@ describe("taskflow-tools trusted plugin", () => {
 
     const got = expectOk(await harness.tools.taskflow_get_own.execute("get-1", { flowId }));
     expect(got.flowId).toBe(flowId);
+  });
+
+  it("keeps gateway approval waits below the outer agent tool timeout", async () => {
+    const gatewayCaller = vi.fn<GatewayCaller>(async (method) => {
+      if (method === "plugin.approval.request") {
+        return { id: "approval-1" };
+      }
+      if (method === "plugin.approval.waitDecision") {
+        return { id: "approval-1", decision: "allow-once" };
+      }
+      throw new Error(`unexpected gateway method: ${method}`);
+    });
+    const harness = createHarness({ approvalViaGateway: true, gatewayCaller });
+
+    expectOk(
+      await harness.tools.taskflow_create_managed.execute("create-gateway-approval", {
+        goal: "Create with gateway approval",
+        idempotencyKey: "gateway-approval-create",
+      }),
+    );
+
+    expect(gatewayCaller).toHaveBeenNthCalledWith(
+      1,
+      "plugin.approval.request",
+      { timeoutMs: 85_000 },
+      expect.objectContaining({
+        timeoutMs: 75_000,
+        twoPhase: true,
+      }),
+      { expectFinal: false },
+    );
+    expect(gatewayCaller).toHaveBeenNthCalledWith(
+      2,
+      "plugin.approval.waitDecision",
+      { timeoutMs: 85_000 },
+      { id: "approval-1" },
+    );
+    expect((gatewayCaller.mock.calls[0][2] as { timeoutMs?: number }).timeoutMs).toBeLessThan(
+      90_000,
+    );
+    expect(gatewayCaller.mock.calls[1][1].timeoutMs).toBeLessThan(90_000);
   });
 
   it("includes sanitized linked task details on get results when runtime details are available", async () => {

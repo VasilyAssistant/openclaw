@@ -39,7 +39,10 @@ export const TASKFLOW_TOOL_NAMES = [
 ] as const satisfies readonly ToolName[];
 
 const CONTROLLER_ID = "taskflow-tools/agent";
-const APPROVAL_TIMEOUT_MS = 120_000;
+// Keep approval waits below common agent tool-call ceilings so callers get a structured
+// approval_not_granted response instead of an outer tool timeout.
+const APPROVAL_TIMEOUT_MS = 75_000;
+const APPROVAL_GATEWAY_TIMEOUT_MS = APPROVAL_TIMEOUT_MS + 10_000;
 const SCHEDULE_GATEWAY_TIMEOUT_MS = 60_000;
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "cancelled", "lost"]);
 
@@ -301,7 +304,7 @@ async function callApprovalRequest(
   }
   return (await callGatewayTool(
     "plugin.approval.request",
-    { timeoutMs: APPROVAL_TIMEOUT_MS + 10_000 },
+    { timeoutMs: APPROVAL_GATEWAY_TIMEOUT_MS },
     params,
     { expectFinal: false },
   )) as ApprovalRequestResult | undefined;
@@ -320,7 +323,7 @@ async function callApprovalWait(
   }
   return (await callGatewayTool(
     "plugin.approval.waitDecision",
-    { timeoutMs: APPROVAL_TIMEOUT_MS + 10_000 },
+    { timeoutMs: APPROVAL_GATEWAY_TIMEOUT_MS },
     { id: approvalId },
   )) as ApprovalRequestResult | undefined;
 }
