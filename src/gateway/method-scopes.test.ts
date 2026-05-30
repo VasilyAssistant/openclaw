@@ -423,6 +423,13 @@ describe("core gateway method classification", () => {
       });
     }
   });
+
+  it("registers advertised usage summary methods", () => {
+    expect(listGatewayMethods()).toContain("usage.agentSummary");
+    expect(coreGatewayHandlers).toHaveProperty("usage.status");
+    expect(coreGatewayHandlers).toHaveProperty("usage.agentSummary");
+    expect(coreGatewayHandlers).toHaveProperty("usage.cost");
+  });
 });
 
 describe("CLI default operator scopes", () => {

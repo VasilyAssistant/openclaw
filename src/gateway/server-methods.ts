@@ -548,6 +548,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "usage.status",
+      "usage.agentSummary",
       "usage.cost",
       "sessions.usage",
       "sessions.usage.timeseries",
