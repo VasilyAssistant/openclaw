@@ -1,4 +1,4 @@
-import type { TaskFlowRecord, TaskRegistrySummary } from "./types.js";
+import type { TaskFlowRecord, TaskRegistrySummary, TaskRunView } from "./types.js";
 import { redactSecrets } from "./validation.js";
 
 export function sanitizeSummary(
@@ -20,8 +20,10 @@ export function sanitizeSummary(
 export function sanitizeFlow(
   flow: TaskFlowRecord,
   summary?: TaskRegistrySummary,
+  tasks?: TaskRunView[],
 ): TaskFlowRecord & {
   taskSummary?: TaskRegistrySummary;
+  tasks?: TaskRunView[];
 } {
   return {
     flowId: flow.flowId,
@@ -40,7 +42,39 @@ export function sanitizeFlow(
     updatedAt: flow.updatedAt,
     ...(flow.endedAt !== undefined ? { endedAt: flow.endedAt } : {}),
     ...(summary ? { taskSummary: sanitizeSummary(summary) } : {}),
+    ...(tasks && tasks.length > 0 ? { tasks: sanitizeTaskViews(tasks) } : {}),
   };
+}
+
+export function sanitizeTaskViews(tasks: TaskRunView[]): TaskRunView[] {
+  return tasks.map((task) => ({
+    id: task.id,
+    runtime: task.runtime,
+    ...(task.sourceId ? { sourceId: task.sourceId } : {}),
+    ...(task.sessionKey ? { sessionKey: task.sessionKey } : {}),
+    ...(task.ownerKey ? { ownerKey: task.ownerKey } : {}),
+    ...(task.scope ? { scope: task.scope } : {}),
+    ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
+    ...(task.flowId ? { flowId: task.flowId } : {}),
+    ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
+    ...(task.agentId ? { agentId: task.agentId } : {}),
+    ...(task.runId ? { runId: task.runId } : {}),
+    ...(task.taskName ? { taskName: task.taskName } : {}),
+    ...(task.label ? { label: task.label } : {}),
+    title: task.title,
+    status: task.status,
+    ...(task.deliveryStatus ? { deliveryStatus: task.deliveryStatus } : {}),
+    ...(task.notifyPolicy ? { notifyPolicy: task.notifyPolicy } : {}),
+    ...(task.createdAt !== undefined ? { createdAt: task.createdAt } : {}),
+    ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
+    ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
+    ...(task.lastEventAt !== undefined ? { lastEventAt: task.lastEventAt } : {}),
+    ...(task.cleanupAfter !== undefined ? { cleanupAfter: task.cleanupAfter } : {}),
+    ...(task.error ? { error: task.error } : {}),
+    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
+    ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
+    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+  }));
 }
 
 export function sanitizeCronJob(value: unknown): unknown {

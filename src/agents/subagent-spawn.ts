@@ -828,6 +828,7 @@ export async function spawnSubagentDirect(
         error: existingLinked.reason ?? "Linked task idempotency payload conflict.",
         childSessionKey: existingLinked.task?.childSessionKey,
         runId: existingLinked.task?.runId,
+        note: "No duplicate linked TaskRecord was created.",
       };
     }
     if (!existingLinked.found) {

@@ -33,6 +33,7 @@ export function mapTaskRunView(task: TaskRecord): TaskRunView {
     ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
     ...(task.agentId ? { agentId: task.agentId } : {}),
     ...(task.runId ? { runId: task.runId } : {}),
+    ...(task.taskName ? { taskName: task.taskName } : {}),
     ...(task.label ? { label: task.label } : {}),
     title: task.task,
     status: task.status,
