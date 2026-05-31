@@ -37,6 +37,7 @@ type McpLoopbackScopeParams = {
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   senderIsOwner: boolean | undefined;
+  allowGatewaySubagentBinding?: boolean | undefined;
 };
 
 /** Resolves loopback-visible tools after applying gateway scope and native-tool exclusions. */
@@ -75,6 +76,7 @@ export class McpLoopbackToolCache {
         : params.senderIsOwner === false
           ? "non-owner"
           : "unknown-owner",
+      params.allowGatewaySubagentBinding === true ? "subagent-binding" : "no-subagent-binding",
     ].join("\u0000");
     const now = Date.now();
     for (const [key, entry] of this.#entries) {

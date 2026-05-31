@@ -32,6 +32,7 @@ type ScopedToolsCall = {
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
+  allowGatewaySubagentBinding?: boolean;
   surface?: string;
   excludeToolNames?: Iterable<string>;
 };
@@ -1277,6 +1278,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
       "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
     );
+    expect(
+      config.mcpServers?.openclaw?.headers?.["x-openclaw-allow-gateway-subagent-binding"],
+    ).toBe("${OPENCLAW_MCP_ALLOW_GATEWAY_SUBAGENT_BINDING}");
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
   });
 

@@ -111,6 +111,8 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
           "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
           "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
+          "x-openclaw-allow-gateway-subagent-binding":
+            "${OPENCLAW_MCP_ALLOW_GATEWAY_SUBAGENT_BINDING}",
         },
       },
     },
@@ -1268,6 +1270,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           sessionId: "cli-session",
           promptToolNamesHash: "old-tool-surface",
         },
+        allowGatewaySubagentBinding: true,
       });
 
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
@@ -1281,6 +1284,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         accountId: undefined,
         inboundEventKind: undefined,
         sourceReplyDeliveryMode: undefined,
+        senderIsOwner: undefined,
+        allowGatewaySubagentBinding: true,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -1425,6 +1430,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         currentMessageId: "reply-message-1",
         currentInboundAudio: true,
         sourceReplyDeliveryMode: "message_tool_only",
+        allowGatewaySubagentBinding: true,
       });
 
       expect(context.preparedBackend.env).toMatchObject({
@@ -1435,6 +1441,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: "true",
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
+        OPENCLAW_MCP_ALLOW_GATEWAY_SUBAGENT_BINDING: "true",
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

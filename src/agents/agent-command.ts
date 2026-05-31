@@ -2242,6 +2242,9 @@ export async function agentCommand(
           senderIsOwner: opts.senderIsOwner ?? true,
           // Local/CLI callers are trusted by default for per-run model overrides.
           allowModelOverride: opts.allowModelOverride ?? true,
+          // Local/CLI callers run inside a process-local gateway request scope.
+          // Keep sessions_spawn available on resume without exposing it to ingress callers.
+          allowGatewaySubagentBinding: opts.allowGatewaySubagentBinding ?? true,
         },
         runtime,
         resolvedDeps,
@@ -2259,7 +2262,11 @@ export async function agentCommandFromIngress(
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
   return await agentCommandInternal(
-    { ...opts, senderIsOwner: opts.senderIsOwner === true },
+    {
+      ...opts,
+      senderIsOwner: opts.senderIsOwner === true,
+      allowGatewaySubagentBinding: false,
+    },
     runtime,
     deps,
   );

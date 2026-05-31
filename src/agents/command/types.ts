@@ -96,6 +96,8 @@ export type AgentCommandOpts = {
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
+  /** Internal trusted local/gateway runs can expose gateway-bound subagent tools. */
+  allowGatewaySubagentBinding?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
@@ -152,7 +154,7 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
+  "senderIsOwner" | "allowModelOverride" | "allowGatewaySubagentBinding" | "resultMetaOverrides"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;

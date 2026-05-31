@@ -144,6 +144,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         cleanupCliLiveSessionOnRunEnd: opts.cleanupCliLiveSessionOnRunEnd,
         modelRun: opts.modelRun,
         promptMode: opts.promptMode,
+        allowGatewaySubagentBinding: opts.allowGatewaySubagentBinding,
         disableTools: opts.modelRun === true,
         onAgentEvent: params.onAgentEvent,
       } as never);
@@ -487,6 +488,39 @@ describe("agentCommand", () => {
       await agentCommand({ message: "ping", agentId: "main" }, runtime);
 
       expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    });
+  });
+
+  it("enables gateway-bound subagent tools for trusted local agent dispatch", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(
+        async (params: { opts?: { allowGatewaySubagentBinding?: boolean } }) => {
+          expect(params.opts?.allowGatewaySubagentBinding).toBe(true);
+          return createDefaultAgentResult();
+        },
+      );
+
+      await agentCommand({ message: "ping", agentId: "main" }, runtime);
+    });
+  });
+
+  it("does not enable gateway-bound subagent tools for ingress agent dispatch", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(
+        async (params: { opts?: { allowGatewaySubagentBinding?: boolean } }) => {
+          expect(params.opts?.allowGatewaySubagentBinding).toBe(false);
+          return createDefaultAgentResult();
+        },
+      );
+
+      await agentCommandFromIngress(
+        { message: "ping", agentId: "main", allowModelOverride: false },
+        runtime,
+      );
     });
   });
 

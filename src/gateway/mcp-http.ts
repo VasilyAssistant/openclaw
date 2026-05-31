@@ -200,6 +200,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           senderIsOwner: requestContext.senderIsOwner,
+          allowGatewaySubagentBinding: requestContext.allowGatewaySubagentBinding,
         });
 
         const messages = Array.isArray(parsed) ? parsed : [parsed];

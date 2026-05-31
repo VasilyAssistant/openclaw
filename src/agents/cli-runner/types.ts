@@ -95,6 +95,8 @@ export type RunCliAgentParams = {
   senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
+  /** Trusted local/gateway runs can expose gateway-bound subagent tools through loopback MCP. */
+  allowGatewaySubagentBinding?: boolean;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
   disableTools?: boolean;
