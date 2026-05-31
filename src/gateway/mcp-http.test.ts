@@ -24,6 +24,7 @@ type ScopedToolsCall = {
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
+  allowGatewaySubagentBinding?: boolean;
   surface?: string;
   excludeToolNames?: Iterable<string>;
 };
@@ -192,6 +193,59 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("passes trusted subagent binding headers only for owner loopback requests", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const ownerResponse = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: {
+        "content-type": "application/json",
+        "x-openclaw-allow-gateway-subagent-binding": "true",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const nonOwnerResponse = await sendRaw({
+      port: server.port,
+      token: runtime?.nonOwnerToken,
+      headers: {
+        "content-type": "application/json",
+        "x-openclaw-allow-gateway-subagent-binding": "true",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+    });
+
+    expect(ownerResponse.status).toBe(200);
+    expect(nonOwnerResponse.status).toBe(200);
+    expect(getScopedToolsCall(0).allowGatewaySubagentBinding).toBe(true);
+    expect(getScopedToolsCall(1).allowGatewaySubagentBinding).toBeUndefined();
+  });
+
+  it("keeps loopback tool cache entries separate by subagent binding mode", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const sendToolsList = async (allowGatewaySubagentBinding: boolean) =>
+      await sendRaw({
+        port: server?.port ?? 0,
+        token: runtime?.ownerToken,
+        headers: {
+          "content-type": "application/json",
+          ...(allowGatewaySubagentBinding
+            ? { "x-openclaw-allow-gateway-subagent-binding": "true" }
+            : {}),
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+    expect((await sendToolsList(false)).status).toBe(200);
+    expect((await sendToolsList(true)).status).toBe(200);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(getScopedToolsCall(0).allowGatewaySubagentBinding).toBeUndefined();
+    expect(getScopedToolsCall(1).allowGatewaySubagentBinding).toBe(true);
   });
 
   it("keeps loopback tool cache entries separate by inbound event kind and delivery mode", async () => {
@@ -702,6 +756,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
       "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
     );
+    expect(
+      config.mcpServers?.openclaw?.headers?.["x-openclaw-allow-gateway-subagent-binding"],
+    ).toBe("${OPENCLAW_MCP_ALLOW_GATEWAY_SUBAGENT_BINDING}");
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
   });
 });

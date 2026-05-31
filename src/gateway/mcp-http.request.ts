@@ -34,6 +34,7 @@ type McpRequestContext = {
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   senderIsOwner: boolean | undefined;
+  allowGatewaySubagentBinding: boolean | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -51,6 +52,13 @@ function normalizeMcpSourceReplyDeliveryMode(
 ): SourceReplyDeliveryMode | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefined {
+  const trimmed = normalizeOptionalString(value)?.toLowerCase();
+  return trimmed === "true" || trimmed === "1" || trimmed === "yes" || trimmed === "on"
+    ? true
+    : undefined;
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
@@ -194,5 +202,9 @@ export function resolveMcpRequestContext(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),
     ),
     senderIsOwner: auth.senderIsOwner,
+    allowGatewaySubagentBinding:
+      auth.senderIsOwner === true
+        ? normalizeMcpBooleanHeader(getHeader(req, "x-openclaw-allow-gateway-subagent-binding"))
+        : undefined,
   };
 }

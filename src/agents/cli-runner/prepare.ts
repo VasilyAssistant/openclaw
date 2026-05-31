@@ -275,6 +275,8 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
           OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
+          OPENCLAW_MCP_ALLOW_GATEWAY_SUBAGENT_BINDING:
+            params.allowGatewaySubagentBinding === true ? "true" : "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -351,6 +353,7 @@ export async function prepareCliRunContext(
           inboundEventKind: params.currentInboundEventKind,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           senderIsOwner: params.senderIsOwner,
+          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
         }).tools
       : [];
   const promptToolNamesHash =

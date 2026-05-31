@@ -27,6 +27,7 @@ export function resolveMcpLoopbackScopedTools(params: {
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   senderIsOwner: boolean | undefined;
+  allowGatewaySubagentBinding?: boolean | undefined;
 }): { agentId: string | undefined; tools: McpLoopbackTool[] } {
   const scoped = resolveGatewayScopedTools({
     cfg: params.cfg,
@@ -36,6 +37,7 @@ export function resolveMcpLoopbackScopedTools(params: {
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     senderIsOwner: params.senderIsOwner,
+    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     surface: "loopback",
     excludeToolNames: NATIVE_TOOL_EXCLUDE,
   });
@@ -56,6 +58,7 @@ export class McpLoopbackToolCache {
     inboundEventKind: InboundEventKind | undefined;
     sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
     senderIsOwner: boolean | undefined;
+    allowGatewaySubagentBinding?: boolean | undefined;
   }): CachedScopedTools {
     const cacheKey = [
       params.sessionKey,
@@ -64,6 +67,7 @@ export class McpLoopbackToolCache {
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
       params.senderIsOwner === true ? "owner" : "non-owner",
+      params.allowGatewaySubagentBinding === true ? "subagent-binding" : "no-subagent-binding",
     ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
@@ -79,6 +83,7 @@ export class McpLoopbackToolCache {
       inboundEventKind: params.inboundEventKind,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       senderIsOwner: params.senderIsOwner,
+      allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     });
     const nextEntry: CachedScopedTools = {
       agentId: next.agentId,
