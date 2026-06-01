@@ -33,6 +33,8 @@ export type OpenClawPluginToolContext = {
   activeModel?: OpenClawPluginActiveModelContext;
   browser?: {
     sandboxBridgeUrl?: string;
+    resolveSandboxBridgeUrl?: () => Promise<string | undefined>;
+    sandboxAvailable?: boolean;
     allowHostControl?: boolean;
   };
   messageChannel?: string;

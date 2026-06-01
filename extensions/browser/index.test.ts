@@ -132,7 +132,41 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       sandboxBridgeUrl: "http://127.0.0.1:9999",
+      resolveSandboxBridgeUrl: undefined,
+      sandboxAvailable: undefined,
       allowHostControl: true,
+      agentSessionKey: "agent:main:webchat:direct:123",
+    });
+  });
+
+  it("forwards lazy sandbox bridge resolver to the runtime browser tool", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const resolveSandboxBridgeUrl = vi.fn(async () => "http://127.0.0.1:9999");
+
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    const tool = factory({
+      sessionKey: "agent:main:webchat:direct:123",
+      browser: {
+        resolveSandboxBridgeUrl,
+        sandboxAvailable: true,
+        allowHostControl: false,
+      },
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      sandboxBridgeUrl: undefined,
+      resolveSandboxBridgeUrl,
+      sandboxAvailable: true,
+      allowHostControl: false,
       agentSessionKey: "agent:main:webchat:direct:123",
     });
   });

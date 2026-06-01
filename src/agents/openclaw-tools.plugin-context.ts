@@ -22,6 +22,7 @@ export type OpenClawPluginToolOptions = {
   requesterAgentIdOverride?: string;
   sessionId?: string;
   sandboxBrowserBridgeUrl?: string;
+  resolveSandboxBrowserBridgeUrl?: () => Promise<string | undefined>;
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
   allowGatewaySubagentBinding?: boolean;
@@ -75,6 +76,10 @@ export function resolveOpenClawPluginToolInputs(params: {
       activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
+        resolveSandboxBridgeUrl: options?.resolveSandboxBrowserBridgeUrl,
+        sandboxAvailable: Boolean(
+          options?.sandboxBrowserBridgeUrl?.trim() || options?.resolveSandboxBrowserBridgeUrl,
+        ),
         allowHostControl: options?.allowHostBrowserControl,
       },
       messageChannel: options?.agentChannel,

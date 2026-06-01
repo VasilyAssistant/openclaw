@@ -54,6 +54,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       containerWorkspaceDir: "/workspace",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
+      browserAvailable: true,
       browserBridgeUrl: "http://localhost:9222",
       hostBrowserAllowed: true,
     });
@@ -77,6 +78,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       containerWorkspaceDir: "/workspace",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
+      browserAvailable: false,
       hostBrowserAllowed: false,
       elevated: {
         allowed: true,
@@ -103,6 +105,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       containerWorkspaceDir: "/workspace",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
+      browserAvailable: true,
       browserBridgeUrl: "http://localhost:9222",
       hostBrowserAllowed: true,
       elevated: {

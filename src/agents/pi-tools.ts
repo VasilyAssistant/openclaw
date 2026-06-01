@@ -822,6 +822,9 @@ export function createOpenClawCodingTools(options?: {
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
+  const resolveSandboxBrowserBridgeUrl = sandbox?.resolveBrowser
+    ? async () => (await sandbox.resolveBrowser?.())?.bridgeUrl
+    : undefined;
   const shouldInheritEffectiveToolAllowlist = [
     profilePolicy,
     providerProfilePolicy,
@@ -853,6 +856,7 @@ export function createOpenClawCodingTools(options?: {
             requesterSenderId: options?.senderId,
             sessionId: options?.sessionId,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
+            resolveSandboxBrowserBridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             sandboxed: !!sandbox,
             pluginToolAllowlist,
@@ -918,6 +922,7 @@ export function createOpenClawCodingTools(options?: {
     ...(includeOpenClawTools
       ? createOpenClawTools({
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
+          resolveSandboxBrowserBridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
           agentSessionKey: options?.sessionKey,
           runId: options?.runId,

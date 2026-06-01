@@ -428,6 +428,89 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
   });
+
+  it("describes sandbox as the default when a lazy resolver is available", () => {
+    const tool = createBrowserTool({
+      resolveSandboxBridgeUrl: async () => "http://127.0.0.1:9999",
+    });
+
+    expect(tool.description).toContain("Default: sandbox");
+  });
+});
+
+describe("browser tool sandbox bridge resolution", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("resolves the sandbox bridge lazily for the default sandbox target", async () => {
+    const resolveSandboxBridgeUrl = vi.fn(async () => "http://127.0.0.1:9999/");
+    const tool = createBrowserTool({ resolveSandboxBridgeUrl });
+
+    await tool.execute?.("call-1", { action: "status" });
+
+    expect(resolveSandboxBridgeUrl).toHaveBeenCalledTimes(1);
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith("http://127.0.0.1:9999", {
+      profile: undefined,
+      timeoutMs: undefined,
+    });
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve the sandbox bridge for explicit host calls", async () => {
+    const resolveSandboxBridgeUrl = vi.fn(async () => "http://127.0.0.1:9999");
+    const tool = createBrowserTool({
+      resolveSandboxBridgeUrl,
+      allowHostControl: true,
+    });
+
+    await tool.execute?.("call-1", { action: "status", target: "host" });
+
+    expect(resolveSandboxBridgeUrl).not.toHaveBeenCalled();
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(undefined, {
+      profile: undefined,
+      timeoutMs: undefined,
+    });
+  });
+
+  it("does not resolve the sandbox bridge for node browser proxy calls", async () => {
+    mockSingleBrowserProxyNode();
+    const resolveSandboxBridgeUrl = vi.fn(async () => "http://127.0.0.1:9999");
+    const tool = createBrowserTool({ resolveSandboxBridgeUrl });
+
+    await tool.execute?.("call-1", { action: "status", target: "node" });
+
+    expect(resolveSandboxBridgeUrl).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalled();
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve the sandbox bridge for existing-session profiles on host", async () => {
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const resolveSandboxBridgeUrl = vi.fn(async () => "http://127.0.0.1:9999");
+    const tool = createBrowserTool({ resolveSandboxBridgeUrl });
+
+    await tool.execute?.("call-1", { action: "status", profile: "user" });
+
+    expect(resolveSandboxBridgeUrl).not.toHaveBeenCalled();
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(undefined, {
+      profile: "user",
+      timeoutMs: 45_000,
+    });
+  });
+
+  it("keeps host target blocked by sandbox policy without resolving the sandbox bridge", async () => {
+    const resolveSandboxBridgeUrl = vi.fn(async () => "http://127.0.0.1:9999");
+    const tool = createBrowserTool({
+      resolveSandboxBridgeUrl,
+      allowHostControl: false,
+    });
+
+    await expect(tool.execute?.("call-1", { action: "status", target: "host" })).rejects.toThrow(
+      /host browser control is disabled/i,
+    );
+    expect(resolveSandboxBridgeUrl).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser tool snapshot maxChars", () => {

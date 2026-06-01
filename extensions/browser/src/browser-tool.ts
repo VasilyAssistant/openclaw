@@ -219,7 +219,7 @@ function isBrowserNode(node: NodeListNode) {
 async function resolveBrowserNodeTarget(params: {
   requestedNode?: string;
   target?: "sandbox" | "host" | "node";
-  sandboxBridgeUrl?: string;
+  sandboxAvailable?: boolean;
 }): Promise<BrowserNodeTarget | null> {
   const cfg = browserToolDeps.getRuntimeConfig();
   const policy = cfg.gateway?.nodes?.browser;
@@ -230,7 +230,7 @@ async function resolveBrowserNodeTarget(params: {
     }
     return null;
   }
-  if (params.sandboxBridgeUrl?.trim() && params.target !== "node" && !params.requestedNode) {
+  if (params.sandboxAvailable && params.target !== "node" && !params.requestedNode) {
     return null;
   }
   if (params.target && params.target !== "node") {
@@ -346,23 +346,30 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
   applyBrowserProxyPaths(result, mapping);
 }
 
-function resolveBrowserBaseUrl(params: {
+async function resolveBrowserBaseUrl(params: {
   target?: "sandbox" | "host";
   sandboxBridgeUrl?: string;
+  resolveSandboxBridgeUrl?: () => Promise<string | undefined>;
+  sandboxAvailable?: boolean;
   allowHostControl?: boolean;
-}): string | undefined {
+}): Promise<string | undefined> {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const normalizedSandbox = params.sandboxBridgeUrl?.trim() ?? "";
-  const target = params.target ?? (normalizedSandbox ? "sandbox" : "host");
+  const sandboxAvailable = Boolean(
+    params.sandboxAvailable || normalizedSandbox || params.resolveSandboxBridgeUrl,
+  );
+  const target = params.target ?? (sandboxAvailable ? "sandbox" : "host");
 
   if (target === "sandbox") {
-    if (!normalizedSandbox) {
+    const sandboxBridgeUrl =
+      normalizedSandbox || (await params.resolveSandboxBridgeUrl?.())?.trim() || "";
+    if (!sandboxBridgeUrl) {
       throw new Error(
         'Sandbox browser is unavailable. Enable agents.defaults.sandbox.browser.enabled or use target="host" if allowed.',
       );
     }
-    return normalizedSandbox.replace(/\/$/, "");
+    return sandboxBridgeUrl.replace(/\/$/, "");
   }
 
   if (params.allowHostControl === false) {
@@ -429,10 +436,15 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
 
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
+  resolveSandboxBridgeUrl?: () => Promise<string | undefined>;
+  sandboxAvailable?: boolean;
   allowHostControl?: boolean;
   agentSessionKey?: string;
 }): AnyAgentTool {
-  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
+  const sandboxAvailable = Boolean(
+    opts?.sandboxAvailable || opts?.sandboxBridgeUrl?.trim() || opts?.resolveSandboxBridgeUrl,
+  );
+  const targetDefault = sandboxAvailable ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
   return {
@@ -482,7 +494,7 @@ export function createBrowserTool(opts?: {
         nodeTarget = await resolveBrowserNodeTarget({
           requestedNode: requestedNode ?? undefined,
           target,
-          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          sandboxAvailable,
         });
       } catch (error) {
         // Keep the logged-in user browser usable on the host when auto-discovery
@@ -498,9 +510,11 @@ export function createBrowserTool(opts?: {
       const resolvedTarget = target === "node" ? undefined : target;
       const baseUrl = nodeTarget
         ? undefined
-        : resolveBrowserBaseUrl({
+        : await resolveBrowserBaseUrl({
             target: resolvedTarget,
             sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+            resolveSandboxBridgeUrl: opts?.resolveSandboxBridgeUrl,
+            sandboxAvailable,
             allowHostControl: opts?.allowHostControl,
           });
 

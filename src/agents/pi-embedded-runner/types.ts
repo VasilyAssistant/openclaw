@@ -240,6 +240,7 @@ export type EmbeddedSandboxInfo = {
   containerWorkspaceDir?: string;
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
+  browserAvailable?: boolean;
   browserBridgeUrl?: string;
   hostBrowserAllowed?: boolean;
   elevated?: {

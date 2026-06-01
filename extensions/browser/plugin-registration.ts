@@ -21,10 +21,15 @@ const BROWSER_CLI_DESCRIPTOR = {
 
 function createLazyBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
+  resolveSandboxBridgeUrl?: () => Promise<string | undefined>;
+  sandboxAvailable?: boolean;
   allowHostControl?: boolean;
   agentSessionKey?: string;
 }): AnyAgentTool {
-  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
+  const sandboxAvailable = Boolean(
+    opts?.sandboxAvailable || opts?.sandboxBridgeUrl?.trim() || opts?.resolveSandboxBridgeUrl,
+  );
+  const targetDefault = sandboxAvailable ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
   return {
@@ -100,6 +105,8 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerTool(((ctx: OpenClawPluginToolContext) =>
     createLazyBrowserTool({
       sandboxBridgeUrl: ctx.browser?.sandboxBridgeUrl,
+      resolveSandboxBridgeUrl: ctx.browser?.resolveSandboxBridgeUrl,
+      sandboxAvailable: ctx.browser?.sandboxAvailable,
       allowHostControl: ctx.browser?.allowHostControl,
       agentSessionKey: ctx.sessionKey,
     })) as OpenClawPluginToolFactory);
