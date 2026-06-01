@@ -188,8 +188,8 @@ describe("taskflow-tools trusted plugin", () => {
     expect([...TASKFLOW_TOOL_NAMES].toSorted()).toEqual([
       "taskflow_create_managed",
       "taskflow_get_own",
-      "taskflow_list_schedules",
       "taskflow_list_own",
+      "taskflow_list_schedules",
       "taskflow_request_cancel",
       "taskflow_request_schedule",
       "taskflow_request_schedule_cancel",
