@@ -621,6 +621,7 @@ async function createCodexSideToolBridge(input: {
       workspaceDir: input.cwd,
       spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
         sandbox,
+        effectiveWorkspace: input.cwd,
         resolvedWorkspace: input.params.workspaceDir ?? input.cwd,
       }),
       config: input.params.cfg,

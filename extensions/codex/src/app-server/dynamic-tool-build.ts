@@ -234,6 +234,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         ? input.resolvedWorkspace
         : resolveAttemptSpawnWorkspaceDir({
             sandbox: input.sandbox,
+            // Pass the container-facing workspace so an rw sandbox whose effective
+            // workspace differs from the host path still hands the host dir to spawned
+            // sessions. Without it, rw container runs lose workspace inheritance.
+            effectiveWorkspace: input.effectiveWorkspace,
             resolvedWorkspace: input.resolvedWorkspace,
           }),
     config: params.config,

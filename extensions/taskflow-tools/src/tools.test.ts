@@ -188,9 +188,11 @@ describe("taskflow-tools trusted plugin", () => {
     expect([...TASKFLOW_TOOL_NAMES].toSorted()).toEqual([
       "taskflow_create_managed",
       "taskflow_get_own",
+      "taskflow_list_schedules",
       "taskflow_list_own",
       "taskflow_request_cancel",
       "taskflow_request_schedule",
+      "taskflow_request_schedule_cancel",
     ]);
   });
 
@@ -433,6 +435,82 @@ describe("taskflow-tools trusted plugin", () => {
     expect((scheduled.result as { cronJob: Record<string, unknown> }).cronJob).not.toHaveProperty(
       "payload",
     );
+  });
+
+  it("lists schedules through sanitized cron.list requests", async () => {
+    const gatewayCaller = vi.fn<GatewayCaller>(async (method, _options, params) => {
+      expect(method).toBe("cron.list");
+      expect(params).toEqual({
+        limit: 10,
+        offset: 5,
+        query: "worker",
+        enabled: "all",
+        sortBy: "updatedAtMs",
+        sortDir: "desc",
+      });
+      return {
+        jobs: [
+          {
+            id: "cron-1",
+            name: "Worker tick",
+            schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+            payload: { kind: "agentTurn", message: "hidden" },
+            delivery: { channel: "telegram", to: "chat-1" },
+            state: "scheduled",
+          },
+        ],
+        total: 1,
+        limit: 10,
+        offset: 5,
+      };
+    });
+    const harness = createHarness({ gatewayCaller });
+
+    const listed = expectOk(
+      await harness.tools.taskflow_list_schedules.execute("schedule-list-1", {
+        limit: 10,
+        offset: 5,
+        query: "worker",
+        enabled: "all",
+        sortBy: "updatedAtMs",
+        sortDir: "desc",
+      }),
+    );
+
+    expect(harness.requestApproval).not.toHaveBeenCalled();
+    expect(gatewayCaller).toHaveBeenCalledOnce();
+    const jobs = (listed.result as { jobs: Array<Record<string, unknown>> }).jobs;
+    expect(jobs[0]).toMatchObject({ id: "cron-1", name: "Worker tick" });
+    expect(jobs[0]).not.toHaveProperty("payload");
+  });
+
+  it("requires approval before cancelling a schedule through cron.remove", async () => {
+    const gatewayCaller = vi.fn<GatewayCaller>(async (method, _options, params) => {
+      expect(method).toBe("cron.remove");
+      expect(params).toEqual({ id: "cron-1" });
+      return { removed: true, id: "cron-1" };
+    });
+    const harness = createHarness({ gatewayCaller });
+
+    const cancelled = expectOk(
+      await harness.tools.taskflow_request_schedule_cancel.execute("schedule-cancel-1", {
+        scheduleId: "cron-1",
+        idempotencyKey: "cancel-cron-1",
+      }),
+    );
+
+    expect(harness.requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "taskflow_request_schedule_cancel",
+        title: "Cancel scheduled agent task",
+        description: expect.stringContaining("cron-1"),
+      }),
+    );
+    expect(gatewayCaller).toHaveBeenCalledOnce();
+    expect(cancelled.result).toEqual({
+      scheduleId: "cron-1",
+      cronResult: { removed: true, id: "cron-1" },
+    });
   });
 
   it("rejects unsafe schedule recurrence before approval or cron", async () => {

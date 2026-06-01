@@ -419,6 +419,339 @@ describe("runCodexAppServerAttempt", () => {
     expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
   });
 
+  it("filters Codex-native dynamic tools from app-server tool exposure", () => {
+    const tools = [
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "update_plan",
+      "tool_call",
+      "tool_describe",
+      "tool_search",
+      "tool_search_code",
+      "web_search",
+      "message",
+      "heartbeat_respond",
+      "sessions_spawn",
+    ].map((name) => ({ name }));
+
+    expect(testing.filterCodexDynamicTools(tools, {}).map((tool) => tool.name)).toEqual([
+      "web_search",
+      "message",
+      "heartbeat_respond",
+      "sessions_spawn",
+    ]);
+  });
+
+  it("applies additional Codex dynamic tool excludes without exposing Codex-native tools", () => {
+    const tools = ["read", "exec", "message", "custom_tool"].map((name) => ({ name }));
+
+    expect(
+      testing
+        .filterCodexDynamicTools(tools, {
+          codexDynamicToolsExclude: ["custom_tool"],
+        })
+        .map((tool) => tool.name),
+    ).toEqual(["message"]);
+  });
+
+  it("exposes app-server-owned tools directly for forced private QA Codex runtime", () => {
+    const tools = ["read", "write", "image_generate", "message"].map((name) => ({ name }));
+    const privateQaCodexEnv = {
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+    };
+
+    expect(
+      testing.filterCodexDynamicTools(tools, {}, privateQaCodexEnv).map((tool) => tool.name),
+    ).toEqual(["read", "write", "image_generate", "message"]);
+    expect(testing.resolveCodexDynamicToolsLoading({}, privateQaCodexEnv)).toBe("direct");
+  });
+
+  it("limits Codex memory flush runs to managed read and write tools", async () => {
+    const factoryOptions: unknown[] = [];
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [
+        createRuntimeDynamicTool("read"),
+        createRuntimeDynamicTool("write"),
+        createRuntimeDynamicTool("exec"),
+        createRuntimeDynamicTool("process"),
+        createRuntimeDynamicTool("apply_patch"),
+        createRuntimeDynamicTool("message"),
+      ];
+    });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.trigger = "memory";
+    params.memoryFlushWritePath = "memory/2026-05-22.md";
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(params, {
+      enabled: true,
+      backendId: "docker",
+    } as never);
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: true, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(nativeToolSurfaceEnabled).toBe(false);
+    expect(factoryOptions).toHaveLength(1);
+    expect(factoryOptions[0]).toMatchObject({
+      trigger: "memory",
+      memoryFlushWritePath: "memory/2026-05-22.md",
+    });
+    expect(tools.map((tool) => tool.name)).toEqual(["read", "write"]);
+  });
+
+  it("passes the host workspace to spawned sessions when Codex rw sandbox uses a container cwd", async () => {
+    const factoryOptions: unknown[] = [];
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [createRuntimeDynamicTool("message")];
+    });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: "/workspace",
+      sandboxSessionKey,
+      sandbox: {
+        enabled: true,
+        backendId: "codex-test-sandbox",
+        workspaceAccess: "rw",
+      } as never,
+      nativeToolSurfaceEnabled: true,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(factoryOptions).toHaveLength(1);
+    expect(factoryOptions[0]).toMatchObject({
+      workspaceDir: "/workspace",
+      spawnWorkspaceDir: workspaceDir,
+    });
+  });
+
+  it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("read"),
+      createRuntimeDynamicTool("write"),
+      createRuntimeDynamicTool("edit"),
+      createRuntimeDynamicTool("apply_patch"),
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: true, backendId: "ssh" } as never,
+      nativeToolSurfaceEnabled: false,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "sandbox_exec", "sandbox_process"]);
+    expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
+      "configured sandbox backend",
+    );
+    expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
+      "sandbox_exec sessions",
+    );
+  });
+
+  it("exposes Docker sandbox shell tools when OpenClaw sandboxing disables native Code Mode", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+    const sandbox = { enabled: true, backendId: "docker" } as never;
+    const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(
+      params,
+      sandbox,
+    );
+
+    const dockerTools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox,
+      nativeToolSurfaceEnabled,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(nativeToolSurfaceEnabled).toBe(false);
+    expect(dockerTools.map((tool) => tool.name)).toEqual([
+      "message",
+      "sandbox_exec",
+      "sandbox_process",
+    ]);
+  });
+
+  it("keeps OpenClaw shell tools for node-targeted Codex app-server runs", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.execOverrides = {
+      host: "node",
+      node: "mac-mini",
+      security: "full",
+      ask: "off",
+    };
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: false, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: false,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+
+    const runtimePolicySessionFile = path.join(tempDir, "runtime-policy-session.jsonl");
+    const runtimePolicyParams = createParams(runtimePolicySessionFile, workspaceDir);
+    runtimePolicyParams.disableTools = false;
+    runtimePolicyParams.runtimePlan = createCodexRuntimePlanFixture();
+    runtimePolicyParams.sessionKey = "agent:main:session-1";
+    runtimePolicyParams.sandboxSessionKey = "agent:policy:session-1";
+    runtimePolicyParams.config = {
+      agents: {
+        list: [
+          { id: "main", tools: { exec: { host: "gateway" } } },
+          { id: "policy", tools: { exec: { host: "node", node: "worker-1" } } },
+        ],
+      },
+    } as never;
+    const runtimePolicyTools = await testing.buildDynamicTools({
+      params: runtimePolicyParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: "agent:policy:session-1",
+      sandbox: { enabled: false, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: false,
+      runAbortController: new AbortController(),
+      sessionAgentId: "policy",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(runtimePolicyTools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+  });
+
+  it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: {
+        enabled: true,
+        backendId: "docker",
+        docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
+      } as never,
+      nativeToolSurfaceEnabled: false,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "sandbox_exec", "sandbox_process"]);
+    expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
+      "Docker container-path bind layout",
+    );
+  });
+
   it("starts active OpenClaw sandbox threads with Codex native execution disabled", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),

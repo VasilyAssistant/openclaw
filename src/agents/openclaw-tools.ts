@@ -168,8 +168,8 @@ export function createOpenClawTools(
     /**
      * Workspace directory to pass to spawned subagents for inheritance.
      * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
-     * session itself is running in a copied-workspace sandbox (`ro` or `none`) so
-     * subagents inherit the real workspace path instead of the sandbox copy.
+     * session itself is running against a sandbox-local path so subagents inherit the
+     * real workspace path instead of persisting the sandbox path in gateway metadata.
      */
     spawnWorkspaceDir?: string;
     /** Callback invoked when sessions_yield tool is called. */

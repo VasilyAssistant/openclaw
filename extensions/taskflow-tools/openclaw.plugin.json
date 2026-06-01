@@ -11,7 +11,9 @@
       "taskflow_list_own",
       "taskflow_get_own",
       "taskflow_request_cancel",
-      "taskflow_request_schedule"
+      "taskflow_request_schedule",
+      "taskflow_list_schedules",
+      "taskflow_request_schedule_cancel"
     ]
   },
   "toolMetadata": {
@@ -19,7 +21,9 @@
     "taskflow_list_own": { "optional": true },
     "taskflow_get_own": { "optional": true },
     "taskflow_request_cancel": { "optional": true },
-    "taskflow_request_schedule": { "optional": true }
+    "taskflow_request_schedule": { "optional": true },
+    "taskflow_list_schedules": { "optional": true },
+    "taskflow_request_schedule_cancel": { "optional": true }
   },
   "configSchema": {
     "type": "object",

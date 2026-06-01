@@ -1242,12 +1242,15 @@ export async function runEmbeddedAttempt(
             cwd: effectiveCwd,
             workspaceDir: effectiveWorkspace,
             // Runtime cwd can point at a task repo while bootstrap/persona files stay in the
-            // agent workspace. Spawned subagents inherit the real agent workspace, not task cwd.
+            // agent workspace. Spawned subagents inherit the real agent workspace, not task cwd;
+            // and when the agent sees a sandbox path, inherit the host workspace rather than the
+            // sandbox-local path persisted in gateway metadata.
             spawnWorkspaceDir:
               effectiveCwd !== effectiveWorkspace
                 ? resolvedWorkspace
                 : resolveAttemptSpawnWorkspaceDir({
                     sandbox,
+                    effectiveWorkspace,
                     resolvedWorkspace,
                   }),
             config: toolSearchRuntimeConfig,

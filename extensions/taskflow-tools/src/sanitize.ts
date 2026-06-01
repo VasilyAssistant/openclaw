@@ -110,3 +110,19 @@ export function sanitizeCronJob(value: unknown): unknown {
       : {}),
   };
 }
+
+export function sanitizeCronListPage(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const page = value as Record<string, unknown>;
+  const jobs = Array.isArray(page.jobs) ? page.jobs.map((job) => sanitizeCronJob(job)) : [];
+  return {
+    jobs,
+    total: page.total,
+    limit: page.limit,
+    offset: page.offset,
+    nextOffset: page.nextOffset,
+    ...(page.deliveryPreviews ? { deliveryPreviews: page.deliveryPreviews } : {}),
+  };
+}
