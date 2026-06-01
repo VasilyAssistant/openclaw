@@ -109,6 +109,7 @@ export type SandboxContext = {
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;
+  resolveBrowser?: () => Promise<SandboxBrowserContext | undefined>;
   fsBridge?: SandboxFsBridge;
   backend?: SandboxBackendHandle;
 };

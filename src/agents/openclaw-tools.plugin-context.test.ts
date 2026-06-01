@@ -158,7 +158,27 @@ describe("openclaw plugin tool context", () => {
 
     expect(result.context.browser).toStrictEqual({
       sandboxBridgeUrl: "http://127.0.0.1:9999",
+      resolveSandboxBridgeUrl: undefined,
+      sandboxAvailable: true,
       allowHostControl: true,
+    });
+  });
+
+  it("forwards lazy browser session wiring", () => {
+    const resolveSandboxBridgeUrl = vi.fn(async () => "http://127.0.0.1:9999");
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        resolveSandboxBrowserBridgeUrl: resolveSandboxBridgeUrl,
+        allowHostBrowserControl: false,
+      },
+    });
+
+    expect(result.context.browser).toStrictEqual({
+      sandboxBridgeUrl: undefined,
+      resolveSandboxBridgeUrl,
+      sandboxAvailable: true,
+      allowHostControl: false,
     });
   });
 

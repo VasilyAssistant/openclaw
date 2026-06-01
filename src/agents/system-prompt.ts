@@ -1170,7 +1170,9 @@ export function buildAgentSystemPrompt(params: {
                     : ""
                 }`
               : "",
-            params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
+            params.sandboxInfo.browserAvailable || params.sandboxInfo.browserBridgeUrl
+              ? "Sandbox browser: enabled."
+              : "",
             params.sandboxInfo.hostBrowserAllowed === true
               ? "Host browser control: allowed."
               : params.sandboxInfo.hostBrowserAllowed === false

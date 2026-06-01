@@ -56,6 +56,8 @@ const BROWSER_CLI_DESCRIPTOR = {
 
 function createLazyBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
+  resolveSandboxBridgeUrl?: () => Promise<string | undefined>;
+  sandboxAvailable?: boolean;
   allowHostControl?: boolean;
   agentSessionKey?: string;
   agentDir?: string;
@@ -70,7 +72,10 @@ function createLazyBrowserTool(opts?: {
     chatType?: string;
   };
 }): AnyAgentTool {
-  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
+  const sandboxAvailable = Boolean(
+    opts?.sandboxAvailable || opts?.sandboxBridgeUrl?.trim() || opts?.resolveSandboxBridgeUrl,
+  );
+  const targetDefault = sandboxAvailable ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
   return {

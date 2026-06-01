@@ -86,6 +86,7 @@ let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
 export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;
+    resolveSandboxBrowserBridgeUrl?: () => Promise<string | undefined>;
     allowHostBrowserControl?: boolean;
     agentSessionKey?: string;
     /**

@@ -257,7 +257,7 @@ describe("resolveSandboxContext", () => {
     }
   }, 15_000);
 
-  it("passes the resolved browser SSRF policy to sandbox browser setup", async () => {
+  it("defers sandbox browser setup until the lazy resolver is called", async () => {
     ensureSandboxBrowserMock.mockClear();
     const restore = registerSandboxBackend("test-browser-backend", async () => ({
       id: "test-browser-backend",
@@ -281,6 +281,7 @@ describe("resolveSandboxContext", () => {
         browser: {
           ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
         },
+        tools: { sandbox: { tools: { alsoAllow: ["browser"] } } },
         agents: {
           defaults: {
             sandbox: {
@@ -295,17 +296,68 @@ describe("resolveSandboxContext", () => {
         },
       };
 
-      await resolveSandboxContext({
+      const result = await resolveSandboxContext({
         config: cfg,
         sessionKey: "agent:worker:browser",
         workspaceDir: "/tmp/openclaw-test",
       });
+
+      expect(ensureSandboxBrowserMock).not.toHaveBeenCalled();
+      await result?.resolveBrowser?.();
 
       const browserCalls = ensureSandboxBrowserMock.mock.calls as unknown as Array<
         [{ ssrfPolicy?: unknown }]
       >;
       const [browserOptions] = browserCalls[0] ?? [];
       expect(browserOptions?.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: true });
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("does not advertise a sandbox browser resolver when browser is denied by policy", async () => {
+    ensureSandboxBrowserMock.mockClear();
+    const restore = registerSandboxBackend("test-browser-denied-backend", async () => ({
+      id: "test-browser-denied-backend",
+      runtimeId: "test-browser-denied-runtime",
+      runtimeLabel: "Test Browser Denied Runtime",
+      workdir: "/workspace",
+      capabilities: { browser: true },
+      buildExecSpec: async () => ({
+        argv: ["test-browser-denied-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed",
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-browser-denied-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+              browser: { enabled: true },
+            },
+          },
+        },
+      };
+
+      const result = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:worker:browser-denied",
+        workspaceDir: "/tmp/openclaw-test",
+      });
+
+      expect(result?.resolveBrowser).toBeUndefined();
+      expect(ensureSandboxBrowserMock).not.toHaveBeenCalled();
     } finally {
       restore();
     }
