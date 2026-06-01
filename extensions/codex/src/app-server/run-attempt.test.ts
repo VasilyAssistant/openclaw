@@ -1049,6 +1049,46 @@ describe("runCodexAppServerAttempt", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["read", "write"]);
   });
 
+  it("passes the host workspace to spawned sessions when Codex rw sandbox uses a container cwd", async () => {
+    const factoryOptions: unknown[] = [];
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [createRuntimeDynamicTool("message")];
+    });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: "/workspace",
+      sandboxSessionKey,
+      sandbox: {
+        enabled: true,
+        backendId: "codex-test-sandbox",
+        workspaceAccess: "rw",
+      } as never,
+      nativeToolSurfaceEnabled: true,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(factoryOptions).toHaveLength(1);
+    expect(factoryOptions[0]).toMatchObject({
+      workspaceDir: "/workspace",
+      spawnWorkspaceDir: workspaceDir,
+    });
+  });
+
   it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("read"),

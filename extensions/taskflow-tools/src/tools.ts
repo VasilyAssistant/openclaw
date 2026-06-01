@@ -1,6 +1,6 @@
 import { parseConfig } from "./config.js";
 import { withIdempotency } from "./idempotency.js";
-import { sanitizeCronJob, sanitizeFlow } from "./sanitize.js";
+import { sanitizeCronJob, sanitizeCronListPage, sanitizeFlow } from "./sanitize.js";
 import { buildCronJob, describeScheduleApproval, normalizeScheduleInput } from "./schedule.js";
 import type {
   AgentToolResult,
@@ -36,6 +36,8 @@ export const TASKFLOW_TOOL_NAMES = [
   "taskflow_get_own",
   "taskflow_request_cancel",
   "taskflow_request_schedule",
+  "taskflow_list_schedules",
+  "taskflow_request_schedule_cancel",
 ] as const satisfies readonly ToolName[];
 
 const CONTROLLER_ID = "taskflow-tools/agent";
@@ -123,6 +125,27 @@ const ToolSchemas: Record<ToolName, unknown> = {
       idempotencyKey: { type: "string" },
     },
     required: ["taskType", "message", "recurrence"],
+  },
+  taskflow_list_schedules: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      limit: { type: "integer", minimum: 1, maximum: 100 },
+      offset: { type: "integer", minimum: 0 },
+      query: { type: "string" },
+      enabled: { type: "string", enum: ["all", "enabled", "disabled"] },
+      sortBy: { type: "string", enum: ["nextRunAtMs", "updatedAtMs", "name"] },
+      sortDir: { type: "string", enum: ["asc", "desc"] },
+    },
+  },
+  taskflow_request_schedule_cancel: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      scheduleId: { type: "string" },
+      idempotencyKey: { type: "string" },
+    },
+    required: ["scheduleId"],
   },
 };
 
@@ -283,6 +306,47 @@ function normalizeFlowRevisionInput(params: Record<string, unknown>) {
   };
 }
 
+function optionalOffset(params: Record<string, unknown>): number | undefined {
+  const raw = params.offset;
+  const value =
+    typeof raw === "number" && Number.isFinite(raw)
+      ? raw
+      : typeof raw === "string" && raw.trim()
+        ? Number(raw)
+        : undefined;
+  if (value === undefined || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
+function optionalEnum<T extends string>(
+  params: Record<string, unknown>,
+  key: string,
+  allowed: readonly T[],
+): T | undefined {
+  const value = optionalString(params, key);
+  return value && (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+}
+
+function normalizeScheduleListInput(params: Record<string, unknown>) {
+  return {
+    limit: optionalLimit(params),
+    offset: optionalOffset(params),
+    query: optionalString(params, "query"),
+    enabled: optionalEnum(params, "enabled", ["all", "enabled", "disabled"] as const),
+    sortBy: optionalEnum(params, "sortBy", ["nextRunAtMs", "updatedAtMs", "name"] as const),
+    sortDir: optionalEnum(params, "sortDir", ["asc", "desc"] as const),
+  };
+}
+
+function normalizeScheduleCancelInput(params: Record<string, unknown>) {
+  return {
+    scheduleId: requiredString(params, "scheduleId"),
+    idempotencyKey: optionalString(params, "idempotencyKey"),
+  };
+}
+
 function compactApprovalText(value: string, maxChars: number): string {
   const compacted = value.replace(/\s+/gu, " ").trim();
   if (compacted.length <= maxChars) {
@@ -379,6 +443,32 @@ async function callCronAdd(deps: TaskFlowToolDeps, job: Record<string, unknown>)
     throw new ToolInputProblem("gateway_unavailable", "Gateway cron API is not available.");
   }
   return await callGatewayTool("cron.add", { timeoutMs: SCHEDULE_GATEWAY_TIMEOUT_MS }, { job });
+}
+
+async function callCronList(
+  deps: TaskFlowToolDeps,
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  const callGatewayTool = deps.callGatewayTool ?? (await loadGatewayCaller());
+  if (!callGatewayTool) {
+    throw new ToolInputProblem("gateway_unavailable", "Gateway cron API is not available.");
+  }
+  const filtered = Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined),
+  );
+  return await callGatewayTool("cron.list", { timeoutMs: SCHEDULE_GATEWAY_TIMEOUT_MS }, filtered);
+}
+
+async function callCronRemove(deps: TaskFlowToolDeps, scheduleId: string): Promise<unknown> {
+  const callGatewayTool = deps.callGatewayTool ?? (await loadGatewayCaller());
+  if (!callGatewayTool) {
+    throw new ToolInputProblem("gateway_unavailable", "Gateway cron API is not available.");
+  }
+  return await callGatewayTool(
+    "cron.remove",
+    { timeoutMs: SCHEDULE_GATEWAY_TIMEOUT_MS },
+    { id: scheduleId },
+  );
 }
 
 async function executeTool(params: {
@@ -569,12 +659,60 @@ async function executeTool(params: {
         },
       });
     }
+    case "taskflow_list_schedules": {
+      const normalized = normalizeScheduleListInput(params.input);
+      const cronResult = await callCronList(params.deps, normalized);
+      return success({
+        toolName: params.toolName,
+        result: sanitizeCronListPage(cronResult),
+      });
+    }
+    case "taskflow_request_schedule_cancel": {
+      const normalized = normalizeScheduleCancelInput(params.input);
+      return withIdempotency({
+        api: params.api,
+        toolName: params.toolName,
+        toolCallId: params.toolCallId,
+        taskFlow,
+        input: params.input,
+        normalized,
+        run: async () => {
+          if (cfg.requireScheduleApproval) {
+            const approvalFailure = await requestApproval({
+              deps: params.deps,
+              taskFlow,
+              ctx: params.ctx,
+              toolName: params.toolName,
+              toolCallId: params.toolCallId,
+              title: "Cancel scheduled agent task",
+              description: `Request cancellation for schedule ${normalized.scheduleId}`,
+              severity: "warning",
+            });
+            if (approvalFailure) {
+              return approvalFailure;
+            }
+          }
+          const cronResult = await callCronRemove(params.deps, normalized.scheduleId);
+          return success({
+            toolName: params.toolName,
+            result: {
+              scheduleId: normalized.scheduleId,
+              cronResult,
+            },
+          });
+        },
+      });
+    }
   }
   return failure("unknown_tool", "Unsupported TaskFlow tool.");
 }
 
 function isMutatingTool(toolName: ToolName): boolean {
-  return toolName !== "taskflow_list_own" && toolName !== "taskflow_get_own";
+  return (
+    toolName !== "taskflow_list_own" &&
+    toolName !== "taskflow_get_own" &&
+    toolName !== "taskflow_list_schedules"
+  );
 }
 
 function logMutation(params: {

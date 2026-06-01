@@ -137,7 +137,9 @@ export type ToolName =
   | "taskflow_list_own"
   | "taskflow_get_own"
   | "taskflow_request_cancel"
-  | "taskflow_request_schedule";
+  | "taskflow_request_schedule"
+  | "taskflow_list_schedules"
+  | "taskflow_request_schedule_cancel";
 
 export type ToolSuccess = {
   ok: true;

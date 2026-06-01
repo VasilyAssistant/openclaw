@@ -1,42 +1,54 @@
 import { describe, expect, it } from "vitest";
-import { createPiToolsSandboxContext } from "../../test-helpers/pi-tools-sandbox-context.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt.thread-helpers.js";
 
 describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
   it("passes the real workspace to sessions_spawn when workspaceAccess is ro", () => {
     const realWorkspace = "/tmp/openclaw-real-workspace";
     const sandboxWorkspace = "/tmp/openclaw-sandbox-workspace";
-    const sandbox = createPiToolsSandboxContext({
-      workspaceDir: sandboxWorkspace,
-      agentWorkspaceDir: realWorkspace,
+    const sandbox = {
+      enabled: true,
       workspaceAccess: "ro",
-      tools: { allow: ["sessions_spawn"], deny: [] },
-      sessionKey: "agent:main:main",
-    });
+    };
 
     expect(
       resolveAttemptSpawnWorkspaceDir({
         sandbox,
+        effectiveWorkspace: sandboxWorkspace,
         resolvedWorkspace: realWorkspace,
       }),
     ).toBe(realWorkspace);
   });
 
-  it("does not override spawned workspace when sandbox workspace is rw", () => {
+  it("does not override spawned workspace when sandbox workspace is rw at the real path", () => {
     const realWorkspace = "/tmp/openclaw-real-workspace";
-    const sandbox = createPiToolsSandboxContext({
-      workspaceDir: realWorkspace,
-      agentWorkspaceDir: realWorkspace,
+    const sandbox = {
+      enabled: true,
       workspaceAccess: "rw",
-      tools: { allow: ["sessions_spawn"], deny: [] },
-      sessionKey: "agent:main:main",
-    });
+    };
 
     expect(
       resolveAttemptSpawnWorkspaceDir({
         sandbox,
+        effectiveWorkspace: realWorkspace,
         resolvedWorkspace: realWorkspace,
       }),
     ).toBeUndefined();
+  });
+
+  it("passes the real workspace when rw sandbox exposes it at a different path", () => {
+    const realWorkspace = "/tmp/openclaw-real-workspace";
+    const sandboxWorkspace = "/workspace";
+    const sandbox = {
+      enabled: true,
+      workspaceAccess: "rw",
+    };
+
+    expect(
+      resolveAttemptSpawnWorkspaceDir({
+        sandbox,
+        effectiveWorkspace: sandboxWorkspace,
+        resolvedWorkspace: realWorkspace,
+      }),
+    ).toBe(realWorkspace);
   });
 });

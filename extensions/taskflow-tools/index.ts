@@ -4,10 +4,14 @@ import { createTaskFlowTools, TASKFLOW_TOOL_NAMES } from "./src/tools.js";
 import type { ToolName } from "./src/types.js";
 
 function toolRisk(toolName: ToolName): "low" | "medium" | "high" {
-  if (toolName === "taskflow_list_own" || toolName === "taskflow_get_own") {
+  if (
+    toolName === "taskflow_list_own" ||
+    toolName === "taskflow_get_own" ||
+    toolName === "taskflow_list_schedules"
+  ) {
     return "low";
   }
-  if (toolName === "taskflow_request_schedule") {
+  if (toolName === "taskflow_request_schedule" || toolName === "taskflow_request_schedule_cancel") {
     return "high";
   }
   return "medium";

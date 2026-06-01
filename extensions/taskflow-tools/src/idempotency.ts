@@ -31,7 +31,9 @@ function inputKey(params: {
       ? "create"
       : params.toolName === "taskflow_request_schedule"
         ? "schedule"
-        : (flowId ?? "noflow");
+        : params.toolName === "taskflow_request_schedule_cancel"
+          ? `schedule:${normalizeString(params.input.scheduleId) ?? "noschedule"}`
+          : (flowId ?? "noflow");
   return [ownerHash(params.ownerKey), params.toolName, scope, hashText(base).slice(0, 32)].join(
     ":",
   );

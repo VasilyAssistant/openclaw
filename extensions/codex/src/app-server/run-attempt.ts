@@ -4360,6 +4360,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     workspaceDir: input.effectiveWorkspace,
     spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
       sandbox: input.sandbox,
+      effectiveWorkspace: input.effectiveWorkspace,
       resolvedWorkspace: input.resolvedWorkspace,
     }),
     config: params.config,

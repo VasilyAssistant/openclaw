@@ -30,9 +30,16 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
     enabled?: boolean;
     workspaceAccess?: string;
   } | null;
+  effectiveWorkspace?: string;
   resolvedWorkspace: string;
 }): string | undefined {
-  return params.sandbox?.enabled && params.sandbox.workspaceAccess !== "rw"
+  if (!params.sandbox?.enabled) {
+    return undefined;
+  }
+  if (params.sandbox.workspaceAccess !== "rw") {
+    return params.resolvedWorkspace;
+  }
+  return params.effectiveWorkspace && params.effectiveWorkspace !== params.resolvedWorkspace
     ? params.resolvedWorkspace
     : undefined;
 }

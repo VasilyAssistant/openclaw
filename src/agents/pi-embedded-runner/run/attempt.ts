@@ -1746,10 +1746,11 @@ export async function runEmbeddedAttempt(
             toolSearchCatalogRef,
             agentDir,
             workspaceDir: effectiveWorkspace,
-            // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-            // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+            // When the running agent sees a sandbox path, spawned subagents should inherit the
+            // host workspace instead of persisting the sandbox-local path in gateway metadata.
             spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
               sandbox,
+              effectiveWorkspace,
               resolvedWorkspace,
             }),
             config: params.config,
