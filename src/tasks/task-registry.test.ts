@@ -3197,6 +3197,97 @@ describe("task-registry", () => {
     });
   });
 
+  it("cancels stale subagent-backed tasks when the subagent run is already missing", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      hoisted.killSubagentRunAdminMock.mockResolvedValue({
+        found: false,
+        killed: false,
+      });
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        childSessionKey: "agent:worker:subagent:missing-child",
+        runId: "run-cancel-missing-subagent",
+        task: "Investigate stale subagent",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: "agent:worker:subagent:missing-child",
+      });
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+      await waitForAssertion(() =>
+        expectRecordFields(sentMessageCall(), {
+          channel: "notifychat",
+          to: "notifychat:123",
+          content: "Background task cancelled: Subagent task (run run-canc).",
+        }),
+      );
+    });
+  });
+
+  it("cancels stale subagent-backed tasks when the subagent run is already inactive", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      hoisted.killSubagentRunAdminMock.mockResolvedValue({
+        found: true,
+        killed: false,
+      });
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:inactive-child",
+        runId: "run-cancel-inactive-subagent",
+        task: "Investigate inactive subagent",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: "agent:worker:subagent:inactive-child",
+      });
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
   it("cancels CLI-tracked tasks in the registry without ACP or subagent teardown", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

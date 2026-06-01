@@ -2001,13 +2001,18 @@ export async function cancelTaskById(params: {
           cfg: params.cfg,
           sessionKey: childSessionKey,
         });
-        if (!result.found || !result.killed) {
-          return {
-            found: true,
-            cancelled: false,
-            reason: result.found ? "Subagent was not running." : "Subagent task not found.",
-            task: cloneTaskRecord(task),
-          };
+        if (!result.found) {
+          log.warn("Cancelling stale task after subagent run was not found", {
+            taskId: task.taskId,
+            runId: task.runId,
+            childSessionKey,
+          });
+        } else if (!result.killed) {
+          log.warn("Cancelling stale task after subagent run was already inactive", {
+            taskId: task.taskId,
+            runId: task.runId,
+            childSessionKey,
+          });
         }
       } else {
         return {

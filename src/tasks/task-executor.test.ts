@@ -939,6 +939,45 @@ describe("task-executor", () => {
     });
   });
 
+  it("settles one-task flows when a stale subagent child run is already missing", async () => {
+    await withTaskExecutorStateDir(async () => {
+      hoisted.killSubagentRunAdminMock.mockResolvedValue({
+        found: false,
+        killed: false,
+      });
+
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:missing-child",
+        runId: "run-missing-subagent-flow-cancel",
+        task: "Inspect a stale PR",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+      const flowId = expectParentFlowId(child);
+
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId,
+      });
+
+      expect(cancelled.found).toBe(true);
+      expect(cancelled.cancelled).toBe(true);
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
+        cfg: {} as never,
+        sessionKey: "agent:codex:subagent:missing-child",
+      });
+      const task = getTaskById(child.taskId);
+      expect(task?.taskId).toBe(child.taskId);
+      expect(task?.status).toBe("cancelled");
+      const flow = getTaskFlowById(flowId);
+      expect(flow?.flowId).toBe(flowId);
+      expect(flow?.status).toBe("cancelled");
+    });
+  });
+
   it("routes TaskFlow cancellation through the registered detached runtime", async () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
