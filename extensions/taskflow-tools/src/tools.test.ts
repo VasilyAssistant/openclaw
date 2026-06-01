@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/unbound-method -- vitest mocks of BoundTaskFlowRuntime methods (createManaged/requestCancel/get) intentionally expose vi.fn refs via the typed runtime object; not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
 import { createTaskFlowTools, TASKFLOW_TOOL_NAMES } from "../index.js";
 import type {
@@ -188,8 +189,8 @@ describe("taskflow-tools trusted plugin", () => {
     expect([...TASKFLOW_TOOL_NAMES].toSorted()).toEqual([
       "taskflow_create_managed",
       "taskflow_get_own",
-      "taskflow_list_schedules",
       "taskflow_list_own",
+      "taskflow_list_schedules",
       "taskflow_request_cancel",
       "taskflow_request_schedule",
       "taskflow_request_schedule_cancel",
