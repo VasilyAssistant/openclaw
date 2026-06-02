@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCodexAppServerUsageSnapshot,
   formatCodexUsageLimitErrorMessage,
+  resolveCodexRateLimitReserveViolation,
   resolveCodexUsageLimitResetAtMs,
   summarizeCodexAccountUsage,
   summarizeCodexRateLimits,
@@ -409,5 +410,66 @@ describe("summarizeCodexRateLimits", () => {
         nowMs,
       ),
     ).toBe("Codex: primary 74% left ⏱1h");
+  });
+});
+
+describe("resolveCodexRateLimitReserveViolation", () => {
+  it("detects Codex bucket reserve violations", () => {
+    const violation = resolveCodexRateLimitReserveViolation({
+      value: {
+        rateLimitsByLimitId: {
+          codex: {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: { usedPercent: 72, windowDurationMins: 300, resetsAt: 1_700_003_600 },
+            secondary: null,
+          },
+        },
+      },
+      reservePercent: 30,
+      modelId: "gpt-5.4-codex",
+    });
+
+    expect(violation).toMatchObject({
+      limitId: "codex",
+      limitLabel: "Codex",
+      window: "primary",
+      remainingPercent: 28,
+      reservePercent: 30,
+    });
+  });
+
+  it("uses the Spark bucket for Spark models instead of the primary Codex bucket", () => {
+    const payload = {
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: { usedPercent: 95, windowDurationMins: 300, resetsAt: 1_700_003_600 },
+          secondary: null,
+        },
+        "gpt-5.3-codex-spark": {
+          limitId: "gpt-5.3-codex-spark",
+          limitName: "GPT 5.3 Codex Spark",
+          primary: { usedPercent: 0, windowDurationMins: 300, resetsAt: 1_700_003_600 },
+          secondary: null,
+        },
+      },
+    };
+
+    expect(
+      resolveCodexRateLimitReserveViolation({
+        value: payload,
+        reservePercent: 10,
+        modelId: "gpt-5.3-codex-spark",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCodexRateLimitReserveViolation({
+        value: payload,
+        reservePercent: 10,
+        modelId: "gpt-5.4-codex",
+      }),
+    ).toMatchObject({ limitId: "codex", remainingPercent: 5 });
   });
 });

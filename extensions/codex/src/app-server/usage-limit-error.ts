@@ -10,6 +10,7 @@ import {
 import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
+import { readCodexRateLimitReserveError } from "./rate-limit-guard.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -77,6 +78,12 @@ export async function formatCodexTurnStartUsageLimitError(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
+  // Vasily rate-limit reserve guard: when the failure is a locally-synthesized reserve
+  // block, surface its message directly instead of round-tripping to the app server.
+  const reserveDecision = readCodexRateLimitReserveError(params.error);
+  if (reserveDecision) {
+    return { message: reserveDecision.message };
+  }
   return refreshCodexUsageLimitError({
     client: params.client,
     source: readCodexTurnStartUsageLimitErrorSource(params.error, params.pendingNotifications),

@@ -215,6 +215,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import {
+  createCodexRateLimitReserveError,
+  evaluateCodexRateLimitGuard,
+} from "./rate-limit-guard.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   clearCodexAppServerBinding,
@@ -2028,6 +2032,29 @@ export async function runCodexAppServerAttempt(
     throw error;
   };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
+    const rateLimitGuardDecision = await evaluateCodexRateLimitGuard({
+      client,
+      attempt: params,
+      pluginConfig,
+      appServer,
+      signal: runAbortController.signal,
+    });
+    if (rateLimitGuardDecision) {
+      embeddedAgentLog.warn("codex rate-limit reserve guard triggered", {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        runClass: rateLimitGuardDecision.runClass,
+        reservePercent: rateLimitGuardDecision.reservePercent,
+        remainingPercent: rateLimitGuardDecision.violation.remainingPercent,
+        limitId: rateLimitGuardDecision.violation.limitId,
+        limitLabel: rateLimitGuardDecision.violation.limitLabel,
+        window: rateLimitGuardDecision.violation.window,
+      });
+      throw createCodexRateLimitReserveError(rateLimitGuardDecision);
+    }
     const turnStartParams = buildTurnStartParams(params, {
       threadId: thread.threadId,
       cwd: codexExecutionCwd,
