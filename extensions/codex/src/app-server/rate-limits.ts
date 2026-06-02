@@ -21,6 +21,17 @@ type RateLimitWindowEntry = {
   window: RateLimitReset;
 };
 
+export type CodexRateLimitReserveViolation = {
+  limitId?: string;
+  limitLabel: string;
+  window: LimitWindowKey | "limit";
+  usedPercent: number;
+  remainingPercent: number;
+  reservePercent: number;
+  resetsAtMs?: number;
+  windowDurationMins?: number;
+};
+
 export type CodexAccountUsageSummary = {
   usageLine?: string;
   blocked: boolean;
@@ -165,6 +176,68 @@ export function summarizeCodexAccountUsage(
     ...(blockingPeriod ? { blockingPeriod } : {}),
     ...(blockingReason ? { blockingReason } : {}),
   };
+}
+
+export function resolveCodexRateLimitReserveViolation(params: {
+  value: JsonValue | undefined;
+  reservePercent: number;
+  modelId?: string;
+}): CodexRateLimitReserveViolation | undefined {
+  const reservePercent = normalizeReservePercent(params.reservePercent);
+  if (reservePercent === undefined) {
+    return undefined;
+  }
+  const snapshots = collectCodexRateLimitSnapshots(params.value).filter(snapshotHasDisplayableData);
+  if (snapshots.length === 0) {
+    return undefined;
+  }
+  const targetSnapshot = selectReserveGuardSnapshot(snapshots, params.modelId);
+  if (!targetSnapshot) {
+    return undefined;
+  }
+  const limitLabel = formatLimitLabel(targetSnapshot);
+  const limitId =
+    readNullableString(targetSnapshot, "limitId") ?? readNullableString(targetSnapshot, "limit_id");
+  const reachedType =
+    readString(targetSnapshot, "rateLimitReachedType") ??
+    readString(targetSnapshot, "rate_limit_reached_type");
+  if (reachedType) {
+    return {
+      ...(limitId ? { limitId } : {}),
+      limitLabel,
+      window: "limit",
+      usedPercent: 100,
+      remainingPercent: 0,
+      reservePercent,
+    };
+  }
+  const violatingWindows = readWindowEntries(targetSnapshot)
+    .flatMap((entry) => {
+      if (entry.window.usedPercent === undefined) {
+        return [];
+      }
+      const usedPercent = clampPercent(entry.window.usedPercent);
+      const remainingPercent = Math.max(0, 100 - usedPercent);
+      if (remainingPercent > reservePercent) {
+        return [];
+      }
+      return [
+        {
+          ...(limitId ? { limitId } : {}),
+          limitLabel,
+          window: entry.key,
+          usedPercent,
+          remainingPercent,
+          reservePercent,
+          ...(entry.window.resetsAtMs > 0 ? { resetsAtMs: entry.window.resetsAtMs } : {}),
+          ...(entry.window.windowDurationMins !== undefined
+            ? { windowDurationMins: entry.window.windowDurationMins }
+            : {}),
+        },
+      ];
+    })
+    .toSorted((left, right) => left.remainingPercent - right.remainingPercent);
+  return violatingWindows[0];
 }
 
 function isCodexUsageLimitError(
@@ -421,6 +494,40 @@ function snapshotHasLimitBlock(snapshot: JsonObject): boolean {
 function isCodexLimitSnapshot(snapshot: JsonObject): boolean {
   const id = readNullableString(snapshot, "limitId") ?? readNullableString(snapshot, "limit_id");
   return !id || id === CODEX_LIMIT_ID;
+}
+
+function selectReserveGuardSnapshot(
+  snapshots: JsonObject[],
+  modelId: string | undefined,
+): JsonObject | undefined {
+  const normalizedModelId = normalizeLimitId(modelId);
+  if (normalizedModelId === "gpt-5.3-codex-spark") {
+    return snapshots.find((snapshot) => {
+      const id =
+        readNullableString(snapshot, "limitId") ?? readNullableString(snapshot, "limit_id");
+      return normalizeLimitId(id) === normalizedModelId;
+    });
+  }
+  return snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
+}
+
+function normalizeReservePercent(value: number): number | undefined {
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
+function normalizeLimitId(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
 }
 
 function selectSnapshotBlockingReset(

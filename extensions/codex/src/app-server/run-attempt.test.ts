@@ -297,6 +297,26 @@ function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
   };
 }
 
+function codexRateLimitPayload(params: { usedPercent: number; resetsAt?: number }) {
+  return {
+    rateLimitsByLimitId: {
+      codex: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: {
+          usedPercent: params.usedPercent,
+          windowDurationMins: 300,
+          resetsAt: params.resetsAt ?? Math.ceil(Date.now() / 1000) + 3600,
+        },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: null,
+      },
+    },
+  };
+}
+
 function assistantMessage(text: string, timestamp: number) {
   return {
     role: "assistant" as const,
@@ -8754,6 +8774,63 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
     expect(result.promptError).not.toContain("Codex did not return a reset time");
+  });
+
+  it("short-circuits background turns when the Codex reserve guard is crossed", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "account/rateLimits/read") {
+        return codexRateLimitPayload({ usedPercent: 80 });
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "cron";
+    params.sessionKey = "agent:ops:background:task-1";
+
+    const result = await runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        rateLimitGuard: {
+          mainReservePercent: 10,
+          backgroundReservePercent: 30,
+        },
+      },
+    });
+
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.promptError).toContain("Codex rate limit reserve reached for background task");
+    expect(result.promptError).toContain("20% remaining");
+    expect(harness.requests.some((request) => request.method === "account/rateLimits/read")).toBe(
+      true,
+    );
+    expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
+  });
+
+  it("allows main-session turns while remaining Codex usage is above the main reserve", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "account/rateLimits/read") {
+        return codexRateLimitPayload({ usedPercent: 85 });
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "user";
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        rateLimitGuard: {
+          mainReservePercent: 10,
+          backgroundReservePercent: 30,
+        },
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
   });
 
   it("cleans up native hook relay state when the Codex turn aborts", async () => {

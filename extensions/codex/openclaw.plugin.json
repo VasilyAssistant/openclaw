@@ -55,6 +55,36 @@
           }
         }
       },
+      "rateLimitGuard": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "mainReservePercent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "backgroundReservePercent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "cacheMaxAgeMs": {
+            "type": "number",
+            "minimum": 0,
+            "default": 60000
+          },
+          "requestTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 3000
+          }
+        }
+      },
       "computerUse": {
         "type": "object",
         "additionalProperties": false,
@@ -231,6 +261,33 @@
     "discovery.timeoutMs": {
       "label": "Discovery Timeout",
       "help": "Maximum time to wait for Codex app-server model discovery before falling back to the bundled model list.",
+      "advanced": true
+    },
+    "rateLimitGuard": {
+      "label": "Rate Limit Guard",
+      "help": "Optional pre-turn Codex account reserve checks that can hand off to configured model fallback before a limit reaches 0%."
+    },
+    "rateLimitGuard.enabled": {
+      "label": "Enable Rate Limit Guard",
+      "help": "When false, Codex turns skip the pre-turn reserve check.",
+      "advanced": true
+    },
+    "rateLimitGuard.mainReservePercent": {
+      "label": "Main Reserve Percent",
+      "help": "Minimum remaining Codex limit percentage to preserve for main sessions before handing off to model fallback."
+    },
+    "rateLimitGuard.backgroundReservePercent": {
+      "label": "Background Reserve Percent",
+      "help": "Minimum remaining Codex limit percentage to preserve for background sessions before handing off to model fallback."
+    },
+    "rateLimitGuard.cacheMaxAgeMs": {
+      "label": "Cache Max Age",
+      "help": "Maximum age of cached Codex rate-limit snapshots used by the guard.",
+      "advanced": true
+    },
+    "rateLimitGuard.requestTimeoutMs": {
+      "label": "Request Timeout",
+      "help": "Maximum time to wait for a guard rate-limit probe before allowing the turn to proceed.",
       "advanced": true
     },
     "computerUse": {

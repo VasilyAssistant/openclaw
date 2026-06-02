@@ -161,6 +161,11 @@ import {
 } from "./protocol.js";
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import {
+  createCodexRateLimitReserveError,
+  evaluateCodexRateLimitGuard,
+  readCodexRateLimitReserveError,
+} from "./rate-limit-guard.js";
+import {
   formatCodexUsageLimitErrorMessage,
   resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
@@ -3043,6 +3048,29 @@ export async function runCodexAppServerAttempt(
 
   let turn: CodexTurnStartResponse | undefined;
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
+    const rateLimitGuardDecision = await evaluateCodexRateLimitGuard({
+      client,
+      attempt: params,
+      pluginConfig,
+      appServer,
+      signal: runAbortController.signal,
+    });
+    if (rateLimitGuardDecision) {
+      embeddedAgentLog.warn("codex rate-limit reserve guard triggered", {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        runClass: rateLimitGuardDecision.runClass,
+        reservePercent: rateLimitGuardDecision.reservePercent,
+        remainingPercent: rateLimitGuardDecision.violation.remainingPercent,
+        limitId: rateLimitGuardDecision.violation.limitId,
+        limitLabel: rateLimitGuardDecision.violation.limitLabel,
+        window: rateLimitGuardDecision.violation.window,
+      });
+      throw createCodexRateLimitReserveError(rateLimitGuardDecision);
+    }
     const turnStartParams = buildTurnStartParams(params, {
       threadId: thread.threadId,
       cwd: codexExecutionCwd,
@@ -5059,6 +5087,10 @@ async function formatCodexTurnStartUsageLimitError(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
+  const reserveDecision = readCodexRateLimitReserveError(params.error);
+  if (reserveDecision) {
+    return { message: reserveDecision.message };
+  }
   return refreshCodexUsageLimitError({
     client: params.client,
     source: readCodexTurnStartUsageLimitErrorSource(params.error, params.pendingNotifications),

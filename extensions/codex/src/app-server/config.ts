@@ -93,6 +93,14 @@ export type ResolvedCodexPluginsPolicy = {
   pluginPolicies: ResolvedCodexPluginPolicy[];
 };
 
+export type CodexRateLimitGuardConfig = {
+  enabled?: boolean;
+  mainReservePercent?: number;
+  backgroundReservePercent?: number;
+  cacheMaxAgeMs?: number;
+  requestTimeoutMs?: number;
+};
+
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
@@ -124,6 +132,7 @@ export type CodexPluginConfig = {
     enabled?: boolean;
     timeoutMs?: number;
   };
+  rateLimitGuard?: CodexRateLimitGuardConfig;
   computerUse?: CodexComputerUseConfig;
   codexPlugins?: CodexPluginsConfig;
   appServer?: {
@@ -227,6 +236,15 @@ const codexAppServerExperimentalSchema = z
     sandboxExecServer: z.boolean().optional(),
   })
   .strict();
+const codexRateLimitGuardSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mainReservePercent: z.number().min(0).max(100).optional(),
+    backgroundReservePercent: z.number().min(0).max(100).optional(),
+    cacheMaxAgeMs: z.number().nonnegative().optional(),
+    requestTimeoutMs: z.number().positive().optional(),
+  })
+  .strict();
 
 const codexPluginEntryConfigSchema = z
   .object({
@@ -256,6 +274,7 @@ const codexPluginConfigSchema = z
       })
       .strict()
       .optional(),
+    rateLimitGuard: codexRateLimitGuardSchema.optional(),
     computerUse: z
       .object({
         enabled: z.boolean().optional(),
