@@ -9,12 +9,16 @@ import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
-vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async () => ({
+const createEmbeddingProviderMock = vi.hoisted(() =>
+  vi.fn(async () => ({
     requestedProvider: "auto",
     provider: null,
     providerUnavailableReason: "No embeddings provider available.",
-  }),
+  })),
+);
+
+vi.mock("./embeddings.js", () => ({
+  createEmbeddingProvider: createEmbeddingProviderMock,
   resolveEmbeddingProviderFallbackModel: () => "fts-only",
 }));
 
@@ -30,6 +34,12 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   beforeEach(async () => {
+    createEmbeddingProviderMock.mockReset();
+    createEmbeddingProviderMock.mockResolvedValue({
+      requestedProvider: "auto",
+      provider: null,
+      providerUnavailableReason: "No embeddings provider available.",
+    });
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
@@ -129,6 +139,32 @@ describe("memory manager FTS-only reindex", () => {
 
     expect(countChunksContaining("refresh marker")).toBeGreaterThan(0);
     expect(countChunksContaining("Alpha topic")).toBe(0);
+  });
+
+  it("continues keyword search from an existing FTS index when provider init fails", async () => {
+    const firstManager = await createManager();
+    await firstManager.sync({ force: true });
+    expect(firstManager.status().chunks).toBeGreaterThan(0);
+    await firstManager.close();
+    manager = null;
+    await closeAllMemorySearchManagers();
+
+    createEmbeddingProviderMock.mockRejectedValue(new Error("OpenAI API key missing"));
+    const restartedManager = await createManager();
+    const results = await restartedManager.search("Alpha topic", {
+      maxResults: 5,
+      minScore: 0,
+    });
+
+    expect(results.some((result) => result.path === "MEMORY.md")).toBe(true);
+    const status = restartedManager.status();
+    expect(status.provider).toBe("none");
+    expect(status.custom?.providerUnavailableReason).toBe("OpenAI API key missing");
+    expect(status.custom?.providerState).toMatchObject({
+      mode: "fts-only",
+      reason: "OpenAI API key missing",
+      attemptedProviderId: "openai",
+    });
   });
 
   it("aborts instead of downgrading an existing semantic index to FTS-only", async () => {
