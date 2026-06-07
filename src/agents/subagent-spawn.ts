@@ -712,6 +712,24 @@ function hasRoutableDeliveryOrigin(
   return Boolean(origin?.channel && origin.to);
 }
 
+function sanitizeSpawnedWorkspaceDirForChild(params: {
+  workspaceDir?: string;
+  requesterSandboxed: boolean;
+}): string | undefined {
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
+  if (!workspaceDir) {
+    return undefined;
+  }
+  const resolved = path.resolve(workspaceDir);
+  if (resolved === path.parse(resolved).root) {
+    return undefined;
+  }
+  if (params.requesterSandboxed && resolved === "/workspace") {
+    return undefined;
+  }
+  return workspaceDir;
+}
+
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -821,6 +839,8 @@ export async function spawnSubagentDirect(
       callerOwnerKey: ownership.completionRequesterSessionKey,
       idempotencyKey: linkedIdempotencyKey,
       idempotencyPayloadHash: linkedPayloadHash,
+      projectKey: params.flowLink.projectKey,
+      controllerId: params.flowLink.controllerId,
     });
     if (existingLinked.conflict) {
       return {
@@ -840,6 +860,16 @@ export async function spawnSubagentDirect(
     if (existingLinked.reserved && existingLinked.task) {
       reusableLinkedTask = existingLinked.task;
       if (existingLinked.task.status !== "queued") {
+        if (existingLinked.task.status !== "running") {
+          return {
+            status: "error",
+            error: `Linked spawn already ended with status ${existingLinked.task.status}; no duplicate subagent was started. Use a new flowLink.idempotencyKey for a deliberate retry.`,
+            childSessionKey: existingLinked.task.childSessionKey,
+            runId: existingLinked.task.runId,
+            taskName: linkedTaskName,
+            note: "No duplicate linked TaskRecord was created.",
+          };
+        }
         return {
           status: "accepted",
           childSessionKey: existingLinked.task.childSessionKey,
@@ -1124,12 +1154,20 @@ export async function spawnSubagentDirect(
     agentGroupSpace: ctx.agentGroupSpace,
     workspaceDir: ctx.workspaceDir,
   });
+  const safeExplicitWorkspaceDir = sanitizeSpawnedWorkspaceDirForChild({
+    workspaceDir: explicitWorkspaceDir,
+    requesterSandboxed: requesterRuntime.sandboxed,
+  });
+  const safeInheritedWorkspaceDir = sanitizeSpawnedWorkspaceDirForChild({
+    workspaceDir: targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
+    requesterSandboxed: requesterRuntime.sandboxed,
+  });
   const inheritedWorkspaceDir =
-    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
+    targetAgentId !== requesterAgentId ? undefined : safeInheritedWorkspaceDir;
   const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
     config: cfg,
     targetAgentId,
-    explicitWorkspaceDir: explicitWorkspaceDir ?? inheritedWorkspaceDir,
+    explicitWorkspaceDir: safeExplicitWorkspaceDir ?? inheritedWorkspaceDir,
   });
 
   const materializedAttachments = await materializeSubagentAttachments({

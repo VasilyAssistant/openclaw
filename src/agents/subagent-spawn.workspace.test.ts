@@ -1,5 +1,15 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  completeTaskRunByRunId,
+  finalizeLinkedTaskSpawn,
+  reserveLinkedTaskInFlowForOwner,
+} from "../tasks/task-executor.js";
+import {
+  createManagedTaskFlow,
+  resetTaskFlowRegistryForTests,
+} from "../tasks/task-flow-registry.js";
+import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
@@ -27,6 +37,8 @@ const hoisted = vi.hoisted(() => ({
     hasHooks: vi.fn(() => false),
     runSubagentSpawning: vi.fn(),
   },
+  sandboxedSessionKeys: new Set<string>(),
+  sandboxMainSubagents: false,
 }));
 
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
@@ -118,17 +130,26 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       hookRunner: hoisted.hookRunner,
       resolveAgentConfig: resolveTestAgentConfig,
       resolveAgentWorkspaceDir: resolveTestAgentWorkspace,
+      resolveSandboxRuntimeStatus: ({ sessionKey }: { sessionKey?: string }) => ({
+        sandboxed:
+          hoisted.sandboxedSessionKeys.has(sessionKey ?? "") ||
+          (hoisted.sandboxMainSubagents && (sessionKey ?? "").startsWith("agent:main:subagent:")),
+      }),
       resetModules: false,
     }));
   });
 
   beforeEach(() => {
     resetSubagentRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
     hoisted.hookRunner.hasHooks.mockReset();
     hoisted.hookRunner.hasHooks.mockImplementation(() => false);
     hoisted.hookRunner.runSubagentSpawning.mockReset();
+    hoisted.sandboxedSessionKeys.clear();
+    hoisted.sandboxMainSubagents = false;
     hoisted.configOverride = createConfigOverride();
     setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
   });
@@ -163,6 +184,114 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       agentId: "main",
       expectedWorkspaceDir: "/tmp/requester-workspace",
     });
+  });
+
+  it("does not inherit sandbox container /workspace as the child host workspace", async () => {
+    hoisted.sandboxedSessionKeys.add("agent:main:main");
+    hoisted.sandboxMainSubagents = true;
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inspect sandbox workspace",
+        agentId: "main",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "123",
+        agentTo: "456",
+        workspaceDir: "/workspace",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(getRegisteredRun()?.workspaceDir).toBe("/tmp/workspace-main");
+  });
+
+  it("does not use filesystem root as the child workspace", async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "inspect root workspace",
+        agentId: "main",
+        cwd: "/",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "123",
+        agentTo: "456",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(getRegisteredRun()?.workspaceDir).toBe("/tmp/requester-workspace");
+  });
+
+  it("does not accept a duplicate linked spawn after the linked task succeeded", async () => {
+    const flow = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/subagent-spawn-linked-terminal",
+      goal: "Linked terminal retry",
+    });
+    const reserved = reserveLinkedTaskInFlowForOwner({
+      flowId: flow.flowId,
+      callerOwnerKey: "agent:main:main",
+      runtime: "subagent",
+      sourceId: "linked-spawn:terminal",
+      childSessionKey: "agent:main:subagent:terminal",
+      runId: "linked-spawn:terminal",
+      taskName: "terminal_child",
+      idempotencyKey: "project:terminal_child:v1",
+      idempotencyPayloadHash: "sha256:terminal",
+      projectKey: "project",
+      controllerId: "controller",
+      task: "Already done",
+      status: "queued",
+    });
+    if (!reserved.task) {
+      throw new Error("Expected linked task reservation");
+    }
+    finalizeLinkedTaskSpawn({
+      taskId: reserved.task.taskId,
+      runId: "linked-spawn:terminal",
+      startedAt: 100,
+      lastEventAt: 100,
+    });
+    completeTaskRunByRunId({
+      runId: "linked-spawn:terminal",
+      endedAt: 200,
+      lastEventAt: 200,
+      terminalSummary: "done",
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "Already done",
+        taskName: "terminal_child",
+        flowLink: {
+          flowId: flow.flowId,
+          taskName: "terminal_child",
+          idempotencyKey: "project:terminal_child:v1",
+          idempotencyPayloadHash: "sha256:terminal",
+          projectKey: "project",
+          controllerId: "controller",
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "123",
+        agentTo: "456",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("already ended with status succeeded");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "agent" }),
+    );
   });
 
   it("uses explicit cwd for cross-agent native subagent spawns without leaking it to Gateway params", async () => {
