@@ -297,6 +297,27 @@ describe("task-executor", () => {
       expect(conflict.conflict).toBe(true);
       expect(conflict.task?.taskId).toBe(first.task?.taskId);
       expect(conflict.reason).toContain("Reuse the exact same task and spawn parameters");
+
+      const projectMismatch = findLinkedTaskByIdempotencyForOwner({
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:main",
+        idempotencyKey: "project:research_notes:v1",
+        idempotencyPayloadHash: "sha256:first",
+        projectKey: "other-project",
+      });
+
+      expect(projectMismatch.conflict).toBe(true);
+      expect(projectMismatch.reason).toContain("projectKey mismatch");
+
+      const scopedMiss = findLinkedTaskByIdempotencyForOwner({
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:other",
+        idempotencyKey: "project:research_notes:v1",
+        idempotencyPayloadHash: "sha256:first",
+      });
+
+      expect(scopedMiss.found).toBe(false);
+      expect(scopedMiss.reason).toBe("Flow not found for this caller owner scope.");
     });
   });
 

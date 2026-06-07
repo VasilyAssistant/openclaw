@@ -561,17 +561,20 @@ export function findLinkedTaskByIdempotencyForOwner(params: {
   callerOwnerKey: string;
   idempotencyKey: string;
   idempotencyPayloadHash?: string;
+  projectKey?: string;
+  controllerId?: string;
 }): LinkedTaskReservationResult {
   const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.callerOwnerKey,
   });
   if (!flow) {
+    const hiddenFlow = getTaskFlowById(params.flowId);
     return {
       found: false,
       reserved: false,
       created: false,
-      reason: "Flow not found.",
+      reason: hiddenFlow ? "Flow not found for this caller owner scope." : "Flow not found.",
     };
   }
   const idempotencyKey = normalizeLinkedTaskKey(params.idempotencyKey);
@@ -597,6 +600,32 @@ export function findLinkedTaskByIdempotencyForOwner(params: {
       flow,
     };
   }
+  const projectKey = normalizeLinkedTaskKey(params.projectKey);
+  const existingProjectKey = normalizeLinkedTaskKey(existing.projectKey);
+  if (projectKey && existingProjectKey && projectKey !== existingProjectKey) {
+    return {
+      found: true,
+      reserved: false,
+      created: false,
+      conflict: true,
+      flow,
+      task: existing,
+      reason: `Linked task projectKey mismatch: this flowLink.idempotencyKey is already bound to projectKey "${existingProjectKey}". Use the original projectKey or choose a new flowLink.idempotencyKey for different work.`,
+    };
+  }
+  const controllerId = normalizeLinkedTaskKey(params.controllerId);
+  const existingControllerId = normalizeLinkedTaskKey(existing.controllerId);
+  if (controllerId && existingControllerId && controllerId !== existingControllerId) {
+    return {
+      found: true,
+      reserved: false,
+      created: false,
+      conflict: true,
+      flow,
+      task: existing,
+      reason: `Linked task controllerId mismatch: this flowLink.idempotencyKey is already bound to controllerId "${existingControllerId}". Use the original controllerId or choose a new flowLink.idempotencyKey for different work.`,
+    };
+  }
   const payloadHash = normalizeLinkedTaskKey(params.idempotencyPayloadHash);
   const existingPayloadHash = normalizeLinkedTaskKey(existing.idempotencyPayloadHash);
   if (payloadHash && existingPayloadHash && payloadHash !== existingPayloadHash) {
@@ -608,7 +637,7 @@ export function findLinkedTaskByIdempotencyForOwner(params: {
       flow,
       task: existing,
       reason:
-        "Linked task idempotency payload conflict: this flowLink.idempotencyKey is already bound to a different sessions_spawn payload. Reuse the exact same task and spawn parameters to retry the existing child, or choose a new flowLink.idempotencyKey for different work.",
+        "Linked task idempotency payload conflict: this flowLink.idempotencyKey is already bound to a different sessions_spawn payload. Reuse the exact same task and spawn parameters to retry the existing child, including taskName, projectKey, controllerId, cwd/model/runtime, and task text; or choose a new flowLink.idempotencyKey for different work.",
     };
   }
   return {
@@ -636,6 +665,8 @@ export function reserveLinkedTaskInFlowForOwner(
     callerOwnerKey: params.callerOwnerKey,
     idempotencyKey: params.idempotencyKey,
     idempotencyPayloadHash: params.idempotencyPayloadHash,
+    projectKey: params.projectKey,
+    controllerId: params.controllerId,
   });
   if (!existing.found || existing.reserved || existing.conflict) {
     return existing;

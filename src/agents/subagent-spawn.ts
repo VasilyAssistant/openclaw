@@ -1090,6 +1090,24 @@ function hasRoutableDeliveryOrigin(
   return Boolean(origin?.channel && origin.to);
 }
 
+function sanitizeSpawnedWorkspaceDirForChild(params: {
+  workspaceDir?: string;
+  requesterSandboxed: boolean;
+}): string | undefined {
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
+  if (!workspaceDir) {
+    return undefined;
+  }
+  const resolved = path.resolve(workspaceDir);
+  if (resolved === path.parse(resolved).root) {
+    return undefined;
+  }
+  if (params.requesterSandboxed && resolved === "/workspace") {
+    return undefined;
+  }
+  return workspaceDir;
+}
+
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -1199,6 +1217,8 @@ export async function spawnSubagentDirect(
       callerOwnerKey: ownership.completionRequesterSessionKey,
       idempotencyKey: linkedIdempotencyKey,
       idempotencyPayloadHash: linkedPayloadHash,
+      projectKey: params.flowLink.projectKey,
+      controllerId: params.flowLink.controllerId,
     });
     if (existingLinked.conflict) {
       return {
@@ -1218,6 +1238,16 @@ export async function spawnSubagentDirect(
     if (existingLinked.reserved && existingLinked.task) {
       reusableLinkedTask = existingLinked.task;
       if (existingLinked.task.status !== "queued") {
+        if (existingLinked.task.status !== "running") {
+          return {
+            status: "error",
+            error: `Linked spawn already ended with status ${existingLinked.task.status}; no duplicate subagent was started. Use a new flowLink.idempotencyKey for a deliberate retry.`,
+            childSessionKey: existingLinked.task.childSessionKey,
+            runId: existingLinked.task.runId,
+            taskName: linkedTaskName,
+            note: "No duplicate linked TaskRecord was created.",
+          };
+        }
         return {
           status: "accepted",
           childSessionKey: existingLinked.task.childSessionKey,
@@ -1267,14 +1297,23 @@ export async function spawnSubagentDirect(
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   const requestedCwd = normalizeOptionalString(params.cwd);
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey: requesterInternalKey,
+  });
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
     agentGroupId: ctx.agentGroupId,
     agentGroupChannel: ctx.agentGroupChannel,
     agentGroupSpace: ctx.agentGroupSpace,
     workspaceDir: ctx.workspaceDir,
   });
+  // Don't leak a sandbox-local workspace path (root or /workspace) to spawned children.
+  const safeInheritedWorkspaceDir = sanitizeSpawnedWorkspaceDirForChild({
+    workspaceDir: targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
+    requesterSandboxed: requesterRuntime.sandboxed,
+  });
   const inheritedWorkspaceDir =
-    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
+    targetAgentId !== requesterAgentId ? undefined : safeInheritedWorkspaceDir;
   const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
     config: cfg,
     targetAgentId,
@@ -1316,10 +1355,6 @@ export async function spawnSubagentDirect(
   }
   let childSessionKey =
     reusableLinkedTask?.childSessionKey ?? `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
-  const requesterRuntime = resolveSandboxRuntimeStatus({
-    cfg,
-    sessionKey: requesterInternalKey,
-  });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey: childSessionKey,
