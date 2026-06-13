@@ -367,6 +367,28 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.taskName).toBe("review_subagents");
   });
 
+  it("accepts kebab-case taskName matching a kebab-case flowLink task", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-kebab-task-name", {
+      task: "watch agentic dev events",
+      taskName: "agentic-dev-events-watch",
+      flowLink: {
+        flowId: "flow-watch-1",
+        taskName: "agentic-dev-events-watch",
+        idempotencyKey: "reminders:agentic-dev-events-watch:v1",
+      },
+    });
+
+    expectDetailFields(result.details, { status: "accepted" });
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.taskName).toBe("agentic-dev-events-watch");
+    const flowLink = requireRecord(spawnArgs.flowLink, "spawn flowLink");
+    expect(flowLink.taskName).toBe("agentic-dev-events-watch");
+  });
+
   it("passes flowLink to subagent spawns with an internal payload hash", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
