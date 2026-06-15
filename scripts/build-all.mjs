@@ -203,6 +203,7 @@ export const BUILD_ALL_PROFILES = {
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+    "check-package-dist-imports",
   ],
   cliStartup: [
     "tsdown",

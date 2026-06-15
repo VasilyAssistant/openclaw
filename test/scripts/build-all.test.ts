@@ -312,6 +312,7 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
+      "check-package-dist-imports",
     ]);
   });
 
