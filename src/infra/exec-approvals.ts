@@ -293,6 +293,17 @@ function resolvePathOverride(name: string): string | null {
   return value ? expandHomePrefix(value) : null;
 }
 
+// Real exec-approvals targets must be absolute (the wrapper may pin them to a relative
+// runtime dir): resolve `~` and relative paths the same way OPENCLAW_STATE_DIR is
+// resolved. Display/transcript paths keep the compact, operator-friendly form above.
+function resolveAbsolutePathOverride(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const value = normalizeOptionalString(env[name]);
+  return value ? resolveHomeRelativePath(value, { env }) : null;
+}
+
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
@@ -322,14 +333,14 @@ export function resolveExecApprovalsPath(): string {
   // Vasily harness pins the exec-approvals file under its own runtime dir, which
   // is intentionally separate from OPENCLAW_STATE_DIR; honor that override first.
   return (
-    resolvePathOverride("OPENCLAW_EXEC_APPROVALS") ??
+    resolveAbsolutePathOverride("OPENCLAW_EXEC_APPROVALS") ??
     path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_FILE)
   );
 }
 
 export function resolveExecApprovalsSocketPath(): string {
   return (
-    resolvePathOverride("OPENCLAW_EXEC_APPROVALS_SOCKET") ??
+    resolveAbsolutePathOverride("OPENCLAW_EXEC_APPROVALS_SOCKET") ??
     path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET)
   );
 }

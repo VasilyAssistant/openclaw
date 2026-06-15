@@ -230,6 +230,14 @@ describe("exec approvals store helpers", () => {
     );
   });
 
+  it("resolves relative file and socket path overrides to absolute", () => {
+    vi.stubEnv("OPENCLAW_EXEC_APPROVALS", "runtime/exec-approvals.json");
+    vi.stubEnv("OPENCLAW_EXEC_APPROVALS_SOCKET", "runtime/exec-approvals.sock");
+
+    expect(resolveExecApprovalsPath()).toBe(path.resolve("runtime/exec-approvals.json"));
+    expect(resolveExecApprovalsSocketPath()).toBe(path.resolve("runtime/exec-approvals.sock"));
+  });
+
   it("merges socket defaults from normalized, current, and built-in fallback", () => {
     const normalized = normalizeExecApprovals({
       version: 1,
