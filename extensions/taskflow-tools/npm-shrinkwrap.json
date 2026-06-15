@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/taskflow-tools",
+  "version": "2026.5.19",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/taskflow-tools",
+      "version": "2026.5.19"
+    }
+  }
+}

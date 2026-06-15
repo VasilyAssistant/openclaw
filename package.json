@@ -106,6 +106,7 @@
     "!dist/extensions/openshell/**",
     "!dist/extensions/slack/**",
     "!dist/extensions/synology-chat/**",
+    "!dist/extensions/taskflow-tools/**",
     "!dist/extensions/tokenjuice/**",
     "!dist/extensions/tlon/**",
     "!dist/extensions/twitch/**",
