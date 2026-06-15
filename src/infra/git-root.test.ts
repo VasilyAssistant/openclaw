@@ -66,7 +66,7 @@ describe("git-root", () => {
       },
     },
     {
-      name: "invalid gitdir content still keeps root detection",
+      name: "invalid child .git is a boundary and does not escape to the parent repo",
       label: "git-root-invalid-file",
       setup: async (temp: string) => {
         const parentRoot = path.join(temp, "repo");
@@ -77,8 +77,11 @@ describe("git-root", () => {
         await fs.writeFile(path.join(childRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
         return {
           startPath: nested,
+          // findGitRoot still treats the child `.git` file as the root marker, but
+          // resolveGitHeadPath stops at that boundary and returns null rather than
+          // walking up to the parent repo's HEAD.
           expectedRoot: childRoot,
-          expectedHead: path.join(parentRoot, ".git", "HEAD"),
+          expectedHead: null,
         };
       },
     },

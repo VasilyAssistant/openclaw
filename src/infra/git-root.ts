@@ -65,9 +65,22 @@ export function resolveGitHeadPath(
   startDir: string,
   opts: { maxDepth?: number } = {},
 ): string | null {
-  // Stricter than findGitRoot: keep walking until a resolvable git dir is found.
-  return walkUpFrom(startDir, opts, (repoRoot) => {
-    const gitDir = resolveGitDirFromMarker(repoRoot);
-    return gitDir ? path.join(gitDir, "HEAD") : null;
-  });
+  // The first `.git` marker is a discovery boundary: resolve HEAD from it, or return
+  // null if it does not point at a real gitdir. Do not walk past a malformed local
+  // marker to a parent repo — that would escape a nested/sandbox checkout and report
+  // the wrong repository's HEAD.
+  let current = path.resolve(startDir);
+  const maxDepth = opts.maxDepth ?? DEFAULT_GIT_DISCOVERY_MAX_DEPTH;
+  for (let i = 0; i < maxDepth; i += 1) {
+    if (hasGitMarker(current)) {
+      const gitDir = resolveGitDirFromMarker(current);
+      return gitDir ? path.join(gitDir, "HEAD") : null;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return null;
 }
