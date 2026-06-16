@@ -30,6 +30,15 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
 const loadCommitmentsCommands = createModuleLoader(() => import("../../commands/commitments.js"));
 const loadTasksCommands = createModuleLoader(() => import("../../commands/tasks.js"));
 const loadFlowsCommands = createModuleLoader(() => import("../../commands/flows.js"));
+const loadUsageCommands = createModuleLoader(() => import("../../commands/usage.js"));
+
+function parseOptionalInt(value: unknown): number | undefined {
+  if (typeof value !== "string" || value.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 function addSessionsListOptions(command: Command): Command {
   return command
@@ -654,6 +663,265 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         await flowsCancelCommand(
           {
             lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  registerFlowLifecycleCommands(tasksFlowCmd);
+  registerUsageCommands(program);
+}
+
+// Generic, owner-scoped TaskFlow lifecycle verbs for out-of-band controllers.
+// Each takes an explicit --owner-key so the surface stays product-agnostic, and
+// runs in-process through the runtime (no live gateway required).
+function registerFlowLifecycleCommands(tasksFlowCmd: Command) {
+  tasksFlowCmd
+    .command("create-managed")
+    .description("Create a managed TaskFlow owned by --owner-key")
+    .requiredOption("--owner-key <key>", "Owner key that scopes the flow")
+    .requiredOption("--controller-id <id>", "Controller id recorded on the flow")
+    .requiredOption("--goal <text>", "Flow goal")
+    .option("--current-step <step>", "Initial current step")
+    .option("--status <status>", "Initial status (queued, running, waiting, blocked)")
+    .option("--notify-policy <policy>", "Notify policy (done_only, state_changes, silent)")
+    .option("--state-json <json>", "Initial durable state as a JSON object")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsCreateManagedCommand } = await loadFlowsCommands();
+        await flowsCreateManagedCommand(
+          {
+            json: Boolean(opts.json),
+            ownerKey: opts.ownerKey,
+            controllerId: opts.controllerId,
+            goal: opts.goal,
+            currentStep: opts.currentStep,
+            status: opts.status,
+            notifyPolicy: opts.notifyPolicy,
+            stateJson: opts.stateJson,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("run-task")
+    .description("Reserve (idempotently) a linked child run inside an owner-scoped flow")
+    .requiredOption("--owner-key <key>", "Owner key that scopes the flow")
+    .requiredOption("--flow-id <id>", "Target flow id")
+    .requiredOption("--idempotency-key <key>", "Linked-task idempotency key")
+    .requiredOption("--idempotency-payload-hash <hash>", "Linked-task idempotency payload hash")
+    .requiredOption("--task <text>", "Task text")
+    .option("--expected-revision <n>", "Optimistic concurrency revision")
+    .option("--runtime <runtime>", "Task runtime (subagent, acp, cli, cron)")
+    .option("--source-id <id>", "Source id")
+    .option("--child-session-key <key>", "Child session key")
+    .option("--agent-id <id>", "Agent id for the child run")
+    .option("--run-id <id>", "Run id")
+    .option("--task-name <name>", "Task name")
+    .option("--project-key <key>", "Project key")
+    .option("--controller-id <id>", "Controller id")
+    .option("--attempt <n>", "Attempt number")
+    .option("--label <text>", "Task label")
+    .option("--notify-policy <policy>", "Notify policy (done_only, state_changes, silent)")
+    .option("--delivery-status <status>", "Initial delivery status")
+    .option("--status <status>", "Initial task status (queued, running)")
+    .option("--progress-summary <text>", "Initial progress summary")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsRunTaskCommand } = await loadFlowsCommands();
+        await flowsRunTaskCommand(
+          {
+            json: Boolean(opts.json),
+            ownerKey: opts.ownerKey,
+            flowId: opts.flowId,
+            expectedRevision: parseOptionalInt(opts.expectedRevision),
+            idempotencyKey: opts.idempotencyKey,
+            idempotencyPayloadHash: opts.idempotencyPayloadHash,
+            task: opts.task,
+            runtime: opts.runtime,
+            sourceId: opts.sourceId,
+            childSessionKey: opts.childSessionKey,
+            agentId: opts.agentId,
+            runId: opts.runId,
+            taskName: opts.taskName,
+            projectKey: opts.projectKey,
+            controllerId: opts.controllerId,
+            attempt: parseOptionalInt(opts.attempt),
+            label: opts.label,
+            notifyPolicy: opts.notifyPolicy,
+            deliveryStatus: opts.deliveryStatus,
+            status: opts.status,
+            progressSummary: opts.progressSummary,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const flowMutators: Array<{
+    name: string;
+    description: string;
+    fn: keyof Awaited<ReturnType<typeof loadFlowsCommands>>;
+    extraOptions?: (command: Command) => Command;
+  }> = [
+    {
+      name: "update-state",
+      description: "Update durable state of an owner-scoped flow",
+      fn: "flowsUpdateStateCommand",
+    },
+    {
+      name: "finish",
+      description: "Mark an owner-scoped flow as succeeded",
+      fn: "flowsFinishCommand",
+    },
+    {
+      name: "fail",
+      description: "Mark an owner-scoped flow as failed",
+      fn: "flowsFailCommand",
+      extraOptions: (command) =>
+        command
+          .option("--blocked-task-id <id>", "Blocking task id")
+          .option("--blocked-summary <text>", "Failure summary"),
+    },
+    {
+      name: "resume",
+      description: "Resume an owner-scoped flow to queued/running",
+      fn: "flowsResumeCommand",
+      extraOptions: (command) =>
+        command.option("--status <status>", "Resume status (queued, running)"),
+    },
+    {
+      name: "set-waiting",
+      description: "Set an owner-scoped flow to waiting/blocked",
+      fn: "flowsSetWaitingCommand",
+      extraOptions: (command) =>
+        command
+          .option("--blocked-task-id <id>", "Blocking task id")
+          .option("--blocked-summary <text>", "Blocked summary")
+          .option("--wait-json <json>", "Wait payload as a JSON value"),
+    },
+  ];
+
+  for (const mutator of flowMutators) {
+    const command = tasksFlowCmd
+      .command(mutator.name)
+      .description(mutator.description)
+      .requiredOption("--owner-key <key>", "Owner key that scopes the flow")
+      .requiredOption("--flow-id <id>", "Target flow id")
+      .option("--expected-revision <n>", "Optimistic concurrency revision")
+      .option("--current-step <step>", "Current step")
+      .option("--state-json <json>", "Durable state as a JSON object")
+      .option("--json", "Output as JSON", false);
+    mutator.extraOptions?.(command);
+    command.action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const commands = await loadFlowsCommands();
+        const fn = commands[mutator.fn] as (
+          options: Record<string, unknown>,
+          runtime: typeof defaultRuntime,
+        ) => Promise<void>;
+        await fn(
+          {
+            json: Boolean(opts.json),
+            ownerKey: opts.ownerKey,
+            flowId: opts.flowId,
+            expectedRevision: parseOptionalInt(opts.expectedRevision),
+            currentStep: opts.currentStep,
+            stateJson: opts.stateJson,
+            status: opts.status,
+            blockedTaskId: opts.blockedTaskId,
+            blockedSummary: opts.blockedSummary,
+            waitJson: opts.waitJson,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  }
+
+  tasksFlowCmd
+    .command("request-cancel")
+    .description("Request cancellation intent on an owner-scoped flow")
+    .requiredOption("--owner-key <key>", "Owner key that scopes the flow")
+    .requiredOption("--flow-id <id>", "Target flow id")
+    .option("--expected-revision <n>", "Optimistic concurrency revision")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsRequestCancelCommand } = await loadFlowsCommands();
+        await flowsRequestCancelCommand(
+          {
+            json: Boolean(opts.json),
+            ownerKey: opts.ownerKey,
+            flowId: opts.flowId,
+            expectedRevision: parseOptionalInt(opts.expectedRevision),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("finalize-run")
+    .description("Finalize a linked child run by run id as a terminal task")
+    .requiredOption("--run-id <id>", "Run id of the linked child run")
+    .requiredOption(
+      "--outcome <outcome>",
+      "Terminal outcome (succeeded, failed, cancelled, timed_out)",
+    )
+    .option("--summary <text>", "Terminal summary")
+    .option("--error <text>", "Error detail (for failed outcomes)")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsFinalizeRunCommand } = await loadFlowsCommands();
+        await flowsFinalizeRunCommand(
+          {
+            json: Boolean(opts.json),
+            runId: opts.runId,
+            outcome: opts.outcome,
+            summary: opts.summary,
+            error: opts.error,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+}
+
+// `usage summary` reports transcript usage for one session or one owner-scoped
+// flow, running the same per-session cost loaders as the gateway usage methods
+// without requiring a live gateway connection.
+function registerUsageCommands(program: Command) {
+  const usageCmd = program.command("usage").description("Inspect token/cost usage");
+
+  usageCmd
+    .command("summary")
+    .description(
+      "Summarize transcript usage for a session (--session) or owner-scoped flow (--flow)",
+    )
+    .option("--session <key>", "Session key to summarize")
+    .option("--flow <id>", "Flow id to summarize (requires --owner-key)")
+    .option("--owner-key <key>", "Owner key scoping the flow lookup")
+    .option("--agent-id <id>", "Agent id hint for resolving sessions")
+    .option("--no-include-historical", "Exclude historical usage-family transcripts")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { usageSummaryCommand } = await loadUsageCommands();
+        await usageSummaryCommand(
+          {
+            json: Boolean(opts.json),
+            session: opts.session,
+            flow: opts.flow,
+            ownerKey: opts.ownerKey,
+            agentId: opts.agentId,
+            includeHistorical: opts.includeHistorical,
           },
           defaultRuntime,
         );

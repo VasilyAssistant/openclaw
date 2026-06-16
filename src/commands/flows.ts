@@ -6,16 +6,36 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
+import { createRuntimeTaskFlow } from "../plugins/runtime/runtime-taskflow.js";
+import type {
+  BoundTaskFlowRuntime,
+  ManagedTaskFlowMutationResult,
+} from "../plugins/runtime/runtime-taskflow.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
-import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
-import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
+import {
+  cancelFlowById,
+  completeTaskRunByRunId,
+  failTaskRunByRunId,
+  getFlowTaskSummary,
+  reserveLinkedTaskInFlowForOwner,
+} from "../tasks/task-executor.js";
+import type {
+  JsonValue,
+  TaskFlowRecord,
+  TaskFlowStatus,
+} from "../tasks/task-flow-registry.types.js";
 import {
   getTaskFlowById,
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
+import type {
+  TaskDeliveryStatus,
+  TaskNotifyPolicy,
+  TaskRuntime,
+} from "../tasks/task-registry.types.js";
 
 const ID_PAD = 10;
 const STATUS_PAD = 10;
@@ -270,4 +290,382 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
   }
   const updated = getTaskFlowById(flow.flowId) ?? result.flow ?? flow;
   runtime.log(`Cancelled ${updated.flowId} (${updated.syncMode}) with status ${updated.status}.`);
+}
+
+// ---------------------------------------------------------------------------
+// Owner-scoped TaskFlow lifecycle primitives.
+//
+// These are thin, generic verbs over the owner-scoped runtime task-flow API
+// (`createRuntimeTaskFlow().bindSession(...)` plus the owner-scoped linked-task
+// executor). They give out-of-band controllers (e.g. a host-side background
+// program) a revision-safe CLI contract for the full flow lifecycle — create,
+// link a child run, mutate flow state, and finalize a run — without depending on
+// OpenClaw's internal module layout. Each caller passes an explicit owner key so
+// the surface stays product-agnostic.
+// ---------------------------------------------------------------------------
+
+type FlowMutateCommonOptions = {
+  json?: boolean;
+  ownerKey: string;
+  flowId: string;
+  expectedRevision?: number;
+  currentStep?: string;
+  stateJson?: string;
+};
+
+function parseStateJson(
+  raw: string | undefined,
+  runtime: RuntimeEnv,
+): JsonValue | null | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed) as JsonValue;
+  } catch {
+    runtime.error("--state-json must be valid JSON.");
+    runtime.exit(1);
+    return undefined;
+  }
+}
+
+function bindOwner(ownerKey: string): BoundTaskFlowRuntime {
+  return createRuntimeTaskFlow().bindSession({ sessionKey: ownerKey });
+}
+
+// Resolve the optimistic-concurrency revision: callers may thread an explicit
+// expectedRevision, but when omitted we read the current owner-scoped record so
+// a single out-of-band mutation does not need to round-trip the revision first.
+function resolveExpectedRevision(
+  bound: BoundTaskFlowRuntime,
+  opts: { flowId: string; expectedRevision?: number },
+  runtime: RuntimeEnv,
+): number | undefined {
+  if (typeof opts.expectedRevision === "number") {
+    return opts.expectedRevision;
+  }
+  const flow = bound.get(opts.flowId);
+  if (!flow) {
+    runtime.error(formatFlowLookupMiss(opts.flowId));
+    runtime.exit(1);
+    return undefined;
+  }
+  return flow.revision;
+}
+
+function emitFlowMutation(
+  result: ManagedTaskFlowMutationResult,
+  opts: { json?: boolean; flowId: string },
+  runtime: RuntimeEnv,
+): void {
+  if (!result.applied) {
+    runtime.error(`TaskFlow mutation failed (${result.code}) for ${opts.flowId}.`);
+    runtime.exit(1);
+    return;
+  }
+  if (opts.json) {
+    writeRuntimeJson(runtime, {
+      flow: result.flow,
+      tasks: listTasksForFlowId(result.flow.flowId),
+    });
+    return;
+  }
+  runtime.log(
+    `TaskFlow ${result.flow.flowId} -> ${result.flow.status} (rev ${result.flow.revision}).`,
+  );
+}
+
+/** Creates a managed TaskFlow owned by the caller owner key. */
+export async function flowsCreateManagedCommand(
+  opts: {
+    json?: boolean;
+    ownerKey: string;
+    controllerId: string;
+    goal: string;
+    currentStep?: string;
+    status?: "queued" | "running" | "waiting" | "blocked";
+    notifyPolicy?: TaskNotifyPolicy;
+    stateJson?: string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const stateJson = parseStateJson(opts.stateJson, runtime);
+  if (opts.stateJson !== undefined && stateJson === undefined) {
+    return;
+  }
+  const bound = bindOwner(opts.ownerKey);
+  const flow = bound.tryCreateManaged({
+    controllerId: opts.controllerId,
+    goal: opts.goal,
+    currentStep: opts.currentStep,
+    status: opts.status,
+    notifyPolicy: opts.notifyPolicy,
+    stateJson,
+  });
+  if (!flow) {
+    runtime.error("TaskFlow creation failed (persistence error).");
+    runtime.exit(1);
+    return;
+  }
+  if (opts.json) {
+    writeRuntimeJson(runtime, { flow, tasks: listTasksForFlowId(flow.flowId) });
+    return;
+  }
+  runtime.log(`Created TaskFlow ${flow.flowId} (${flow.status}).`);
+}
+
+/** Reserves (idempotently) a linked child task run inside an owner-scoped flow. */
+export async function flowsRunTaskCommand(
+  opts: {
+    json?: boolean;
+    ownerKey: string;
+    flowId: string;
+    expectedRevision?: number;
+    idempotencyKey: string;
+    idempotencyPayloadHash: string;
+    task: string;
+    runtime?: TaskRuntime;
+    sourceId?: string;
+    childSessionKey?: string;
+    agentId?: string;
+    runId?: string;
+    taskName?: string;
+    projectKey?: string;
+    controllerId?: string;
+    attempt?: number;
+    label?: string;
+    notifyPolicy?: TaskNotifyPolicy;
+    deliveryStatus?: TaskDeliveryStatus;
+    status?: "queued" | "running";
+    progressSummary?: string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const result = reserveLinkedTaskInFlowForOwner({
+    flowId: opts.flowId,
+    callerOwnerKey: opts.ownerKey,
+    expectedRevision: opts.expectedRevision,
+    runtime: opts.runtime ?? "subagent",
+    sourceId: opts.sourceId,
+    childSessionKey: opts.childSessionKey,
+    agentId: opts.agentId,
+    runId: opts.runId,
+    taskName: opts.taskName,
+    idempotencyKey: opts.idempotencyKey,
+    idempotencyPayloadHash: opts.idempotencyPayloadHash,
+    projectKey: opts.projectKey,
+    controllerId: opts.controllerId,
+    attempt: opts.attempt,
+    label: opts.label,
+    task: opts.task,
+    notifyPolicy: opts.notifyPolicy,
+    deliveryStatus: opts.deliveryStatus,
+    status: opts.status ?? "queued",
+    progressSummary: opts.progressSummary,
+  });
+  if (result.conflict || !result.found || !result.task) {
+    runtime.error(result.reason ?? `Could not link a task into TaskFlow ${opts.flowId}.`);
+    runtime.exit(1);
+    return;
+  }
+  if (opts.json) {
+    writeRuntimeJson(runtime, {
+      created: result.created,
+      reserved: result.reserved,
+      flow: result.flow,
+      task: result.task,
+      tasks: listTasksForFlowId(opts.flowId),
+    });
+    return;
+  }
+  runtime.log(
+    `Linked task ${result.task.taskId} into TaskFlow ${opts.flowId} (${result.created ? "created" : "existing"}).`,
+  );
+}
+
+/** Updates the durable state/currentStep of an owner-scoped managed flow. */
+export async function flowsUpdateStateCommand(opts: FlowMutateCommonOptions, runtime: RuntimeEnv) {
+  const stateJson = parseStateJson(opts.stateJson, runtime);
+  if (opts.stateJson !== undefined && stateJson === undefined) {
+    return;
+  }
+  const bound = bindOwner(opts.ownerKey);
+  const expectedRevision = resolveExpectedRevision(bound, opts, runtime);
+  if (expectedRevision === undefined) {
+    return;
+  }
+  emitFlowMutation(
+    bound.updateState({
+      flowId: opts.flowId,
+      expectedRevision,
+      currentStep: opts.currentStep,
+      stateJson,
+    }),
+    opts,
+    runtime,
+  );
+}
+
+/** Marks an owner-scoped managed flow as succeeded. */
+export async function flowsFinishCommand(opts: FlowMutateCommonOptions, runtime: RuntimeEnv) {
+  const stateJson = parseStateJson(opts.stateJson, runtime);
+  if (opts.stateJson !== undefined && stateJson === undefined) {
+    return;
+  }
+  const bound = bindOwner(opts.ownerKey);
+  const expectedRevision = resolveExpectedRevision(bound, opts, runtime);
+  if (expectedRevision === undefined) {
+    return;
+  }
+  emitFlowMutation(
+    bound.finish({ flowId: opts.flowId, expectedRevision, stateJson }),
+    opts,
+    runtime,
+  );
+}
+
+/** Marks an owner-scoped managed flow as failed (or cancelled, via currentStep). */
+export async function flowsFailCommand(
+  opts: FlowMutateCommonOptions & { blockedTaskId?: string; blockedSummary?: string },
+  runtime: RuntimeEnv,
+) {
+  const stateJson = parseStateJson(opts.stateJson, runtime);
+  if (opts.stateJson !== undefined && stateJson === undefined) {
+    return;
+  }
+  const bound = bindOwner(opts.ownerKey);
+  const expectedRevision = resolveExpectedRevision(bound, opts, runtime);
+  if (expectedRevision === undefined) {
+    return;
+  }
+  emitFlowMutation(
+    bound.fail({
+      flowId: opts.flowId,
+      expectedRevision,
+      blockedTaskId: opts.blockedTaskId,
+      blockedSummary: opts.blockedSummary,
+      stateJson,
+    }),
+    opts,
+    runtime,
+  );
+}
+
+/** Resumes an owner-scoped managed flow back to queued/running. */
+export async function flowsResumeCommand(
+  opts: FlowMutateCommonOptions & { status?: "queued" | "running" },
+  runtime: RuntimeEnv,
+) {
+  const stateJson = parseStateJson(opts.stateJson, runtime);
+  if (opts.stateJson !== undefined && stateJson === undefined) {
+    return;
+  }
+  const bound = bindOwner(opts.ownerKey);
+  const expectedRevision = resolveExpectedRevision(bound, opts, runtime);
+  if (expectedRevision === undefined) {
+    return;
+  }
+  emitFlowMutation(
+    bound.resume({
+      flowId: opts.flowId,
+      expectedRevision,
+      status: opts.status,
+      currentStep: opts.currentStep,
+      stateJson,
+    }),
+    opts,
+    runtime,
+  );
+}
+
+/** Sets an owner-scoped managed flow to waiting/blocked. */
+export async function flowsSetWaitingCommand(
+  opts: FlowMutateCommonOptions & {
+    blockedTaskId?: string;
+    blockedSummary?: string;
+    waitJson?: string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const stateJson = parseStateJson(opts.stateJson, runtime);
+  if (opts.stateJson !== undefined && stateJson === undefined) {
+    return;
+  }
+  const waitJson = parseStateJson(opts.waitJson, runtime);
+  if (opts.waitJson !== undefined && waitJson === undefined) {
+    return;
+  }
+  const bound = bindOwner(opts.ownerKey);
+  const expectedRevision = resolveExpectedRevision(bound, opts, runtime);
+  if (expectedRevision === undefined) {
+    return;
+  }
+  emitFlowMutation(
+    bound.setWaiting({
+      flowId: opts.flowId,
+      expectedRevision,
+      currentStep: opts.currentStep,
+      blockedTaskId: opts.blockedTaskId,
+      blockedSummary: opts.blockedSummary,
+      stateJson,
+      waitJson,
+    }),
+    opts,
+    runtime,
+  );
+}
+
+/** Requests cancellation of an owner-scoped managed flow (intent only). */
+export async function flowsRequestCancelCommand(
+  opts: { json?: boolean; ownerKey: string; flowId: string; expectedRevision?: number },
+  runtime: RuntimeEnv,
+) {
+  const bound = bindOwner(opts.ownerKey);
+  const expectedRevision = resolveExpectedRevision(bound, opts, runtime);
+  if (expectedRevision === undefined) {
+    return;
+  }
+  emitFlowMutation(bound.requestCancel({ flowId: opts.flowId, expectedRevision }), opts, runtime);
+}
+
+/** Finalizes a linked child run by run id as a terminal succeeded/failed/cancelled task. */
+export async function flowsFinalizeRunCommand(
+  opts: {
+    json?: boolean;
+    runId: string;
+    outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
+    summary?: string;
+    error?: string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const now = Date.now();
+  const summary = opts.summary;
+  const result =
+    opts.outcome === "succeeded"
+      ? completeTaskRunByRunId({
+          runId: opts.runId,
+          endedAt: now,
+          lastEventAt: now,
+          progressSummary: summary,
+          terminalSummary: summary,
+          terminalOutcome: "succeeded",
+        })
+      : failTaskRunByRunId({
+          runId: opts.runId,
+          status: opts.outcome,
+          endedAt: now,
+          lastEventAt: now,
+          error: opts.error ?? summary,
+          terminalSummary: summary,
+        });
+  if (opts.json) {
+    writeRuntimeJson(runtime, { runId: opts.runId, outcome: opts.outcome, result });
+    return;
+  }
+  runtime.log(`Finalized run ${opts.runId} as ${opts.outcome}.`);
 }

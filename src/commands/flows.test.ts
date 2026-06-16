@@ -14,7 +14,17 @@ import {
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
+import {
+  flowsCancelCommand,
+  flowsCreateManagedCommand,
+  flowsFinalizeRunCommand,
+  flowsFinishCommand,
+  flowsListCommand,
+  flowsRequestCancelCommand,
+  flowsRunTaskCommand,
+  flowsShowCommand,
+  flowsUpdateStateCommand,
+} from "./flows.js";
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -329,6 +339,152 @@ describe("flows commands", () => {
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toEqual([
         `Cancelled ${flow.flowId} (managed) with status cancelled.`,
       ]);
+    });
+  });
+});
+
+describe("owner-scoped TaskFlow lifecycle commands", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+    resetTaskRegistryDeliveryRuntimeForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+  });
+
+  function lastJson(runtime: TestRuntime): unknown {
+    const calls = vi.mocked(runtime.writeJson).mock.calls;
+    return jsonRoundTrip(calls[calls.length - 1]?.[0]);
+  }
+
+  const ownerKey = "agent:ops:background-program";
+
+  it("creates, idempotently links, mutates, and finalizes a flow", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const createRuntime0 = createRuntime();
+      await flowsCreateManagedCommand(
+        {
+          json: true,
+          ownerKey,
+          controllerId: "vasily/background-program",
+          goal: "Bounded worker",
+          currentStep: "queue_bounded_worker",
+          stateJson: JSON.stringify({ itemId: "item-1" }),
+        },
+        createRuntime0,
+      );
+      const created = lastJson(createRuntime0) as { flow: TaskFlowRecord };
+      expect(created.flow.syncMode).toBe("managed");
+      expect(created.flow.ownerKey).toBe(ownerKey);
+      const flowId = created.flow.flowId;
+
+      const runArgs = {
+        json: true,
+        ownerKey,
+        flowId,
+        idempotencyKey: "vasily-background-program:item-1:task-1",
+        idempotencyPayloadHash: "task:task-1",
+        task: "Do bounded work",
+        childSessionKey: "agent:ops:background:task-1",
+        agentId: "ops",
+        runId: "vasily-background:item-1:task-1",
+        taskName: "item-1",
+        projectKey: "background-program",
+        controllerId: "vasily/background-program",
+        label: "Bounded worker",
+      } as const;
+
+      const runRuntime1 = createRuntime();
+      await flowsRunTaskCommand({ ...runArgs }, runRuntime1);
+      const linked = lastJson(runRuntime1) as {
+        created: boolean;
+        reserved: boolean;
+        task: TaskRecord;
+      };
+      expect(linked.created).toBe(true);
+      expect(linked.task.parentFlowId).toBe(flowId);
+
+      // Second identical link is idempotent: same task, not re-created.
+      const runRuntime2 = createRuntime();
+      await flowsRunTaskCommand({ ...runArgs }, runRuntime2);
+      const relinked = lastJson(runRuntime2) as {
+        created: boolean;
+        reserved: boolean;
+        task: TaskRecord;
+      };
+      expect(relinked.created).toBe(false);
+      expect(relinked.reserved).toBe(true);
+      expect(relinked.task.taskId).toBe(linked.task.taskId);
+
+      const updateRuntime = createRuntime();
+      await flowsUpdateStateCommand(
+        {
+          json: true,
+          ownerKey,
+          flowId,
+          currentStep: "worker_queued",
+          stateJson: JSON.stringify({ itemId: "item-1", taskFlowTaskId: linked.task.taskId }),
+        },
+        updateRuntime,
+      );
+      const updated = lastJson(updateRuntime) as { flow: TaskFlowRecord };
+      expect(updated.flow.currentStep).toBe("worker_queued");
+
+      const finalizeRuntime = createRuntime();
+      await flowsFinalizeRunCommand(
+        { json: true, runId: runArgs.runId, outcome: "succeeded", summary: "Worker done." },
+        finalizeRuntime,
+      );
+      expect(vi.mocked(finalizeRuntime.error)).not.toHaveBeenCalled();
+
+      const finishRuntime = createRuntime();
+      await flowsFinishCommand(
+        { json: true, ownerKey, flowId, stateJson: JSON.stringify({ status: "completed" }) },
+        finishRuntime,
+      );
+      const finished = lastJson(finishRuntime) as { flow: TaskFlowRecord; tasks: TaskRecord[] };
+      expect(finished.flow.status).toBe("succeeded");
+      expect(finished.tasks[0]?.status).toBe("succeeded");
+    });
+  });
+
+  it("rejects lifecycle mutations from a different owner", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const createRuntime0 = createRuntime();
+      await flowsCreateManagedCommand(
+        { json: true, ownerKey, controllerId: "vasily/background-program", goal: "Scoped" },
+        createRuntime0,
+      );
+      const flowId = (lastJson(createRuntime0) as { flow: TaskFlowRecord }).flow.flowId;
+
+      const otherRuntime = createRuntime();
+      await flowsUpdateStateCommand(
+        { json: true, ownerKey: "agent:intruder:background-program", flowId, currentStep: "x" },
+        otherRuntime,
+      );
+      expect(vi.mocked(otherRuntime.exit)).toHaveBeenCalledWith(1);
+      expect(vi.mocked(otherRuntime.writeJson)).not.toHaveBeenCalled();
+    });
+  });
+
+  it("requests cancellation intent on an owner-scoped flow", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const createRuntime0 = createRuntime();
+      await flowsCreateManagedCommand(
+        { json: true, ownerKey, controllerId: "vasily/background-program", goal: "Cancel me" },
+        createRuntime0,
+      );
+      const flowId = (lastJson(createRuntime0) as { flow: TaskFlowRecord }).flow.flowId;
+
+      const cancelRuntime = createRuntime();
+      await flowsRequestCancelCommand({ json: true, ownerKey, flowId }, cancelRuntime);
+      const cancelled = lastJson(cancelRuntime) as { flow: TaskFlowRecord };
+      expect(cancelled.flow.cancelRequestedAt).toBeTruthy();
     });
   });
 });
