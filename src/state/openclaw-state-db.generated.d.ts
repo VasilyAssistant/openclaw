@@ -454,6 +454,34 @@ export interface DiagnosticStabilityBundles {
   reason: string;
 }
 
+export interface DurableApprovals {
+  action_hash: string;
+  action_json: string;
+  applied_at_ms: number | null;
+  applied_result_ref: string | null;
+  created_at_ms: number;
+  decision: string | null;
+  description: string | null;
+  expires_at_ms: number;
+  failure_reason: string | null;
+  id: string;
+  idempotency_key: string | null;
+  kind: string;
+  message_refs_json: string | null;
+  owner_subject: string | null;
+  requester_actor: string | null;
+  resolved_at_ms: number | null;
+  resolved_by: string | null;
+  resume_payload_json: string | null;
+  resume_run_id: string | null;
+  resume_tool_call_id: string | null;
+  resume_tool_name: string | null;
+  risk: string | null;
+  source: string | null;
+  status: string;
+  title: string | null;
+}
+
 export interface ExecApprovalsConfig {
   agent_count: number;
   allowlist_count: number;
@@ -977,6 +1005,7 @@ export interface DB {
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
+  durable_approvals: DurableApprovals;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
   gateway_restart_handoff: GatewayRestartHandoff;

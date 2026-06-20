@@ -1214,3 +1214,43 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
   ON backup_runs(created_at DESC, id);
+
+-- Durable, restart-surviving plugin approval records. Backs deferred (non-blocking)
+-- plugin approvals: the request persists here and returns immediately; the owner
+-- decision is recorded later; on approval the originating tool call is re-invoked
+-- with the immutable snapshot. action_hash binds the decision to that snapshot so
+-- an approved action cannot be swapped before it is applied.
+CREATE TABLE IF NOT EXISTS durable_approvals (
+  id TEXT NOT NULL PRIMARY KEY,
+  status TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  action_hash TEXT NOT NULL,
+  action_json TEXT NOT NULL,
+  title TEXT,
+  description TEXT,
+  risk TEXT,
+  requester_actor TEXT,
+  owner_subject TEXT,
+  source TEXT,
+  idempotency_key TEXT,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  decision TEXT,
+  resolved_by TEXT,
+  resolved_at_ms INTEGER,
+  applied_at_ms INTEGER,
+  applied_result_ref TEXT,
+  failure_reason TEXT,
+  message_refs_json TEXT,
+  resume_run_id TEXT,
+  resume_tool_name TEXT,
+  resume_tool_call_id TEXT,
+  resume_payload_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_approvals_status
+  ON durable_approvals(status, expires_at_ms, id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_approvals_idempotency
+  ON durable_approvals(idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
