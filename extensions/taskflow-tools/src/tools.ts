@@ -41,17 +41,16 @@ export const TASKFLOW_TOOL_NAMES = [
 ] as const satisfies readonly ToolName[];
 
 const CONTROLLER_ID = "taskflow-tools/agent";
-// Keep approval waits below common agent tool-call ceilings so callers get a structured
-// approval_not_granted response instead of an outer tool timeout.
-const APPROVAL_TIMEOUT_MS = 75_000;
-const APPROVAL_GATEWAY_TIMEOUT_MS = APPROVAL_TIMEOUT_MS + 10_000;
+// RPC timeout for the durable approval-request call. The request returns `pending`
+// immediately (no synchronous decision wait), so this only bounds the request RPC;
+// kept below common agent tool-call ceilings.
+const APPROVAL_GATEWAY_TIMEOUT_MS = 85_000;
 const SCHEDULE_GATEWAY_TIMEOUT_MS = 60_000;
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "cancelled", "lost"]);
 
 export type TaskFlowToolDeps = {
   nowMs?: () => number;
   requestApproval?: (params: Record<string, unknown>) => Promise<ApprovalRequestResult | undefined>;
-  waitApprovalDecision?: (approvalId: string) => Promise<ApprovalRequestResult | undefined>;
   callGatewayTool?: GatewayCaller;
 };
 
@@ -374,25 +373,15 @@ async function callApprovalRequest(
   )) as ApprovalRequestResult | undefined;
 }
 
-async function callApprovalWait(
-  deps: TaskFlowToolDeps,
-  approvalId: string,
-): Promise<ApprovalRequestResult | undefined> {
-  if (deps.waitApprovalDecision) {
-    return deps.waitApprovalDecision(approvalId);
-  }
-  const callGatewayTool = deps.callGatewayTool ?? (await loadGatewayCaller());
-  if (!callGatewayTool) {
-    return undefined;
-  }
-  return (await callGatewayTool(
-    "plugin.approval.waitDecision",
-    { timeoutMs: APPROVAL_GATEWAY_TIMEOUT_MS },
-    { id: approvalId },
-  )) as ApprovalRequestResult | undefined;
-}
-
-async function requestApproval(params: {
+/**
+ * Request a deferred (durable) approval and return a `pending_approval` envelope. Unlike
+ * `requestApproval`, this does not block for a synchronous decision: the gateway persists
+ * the immutable action snapshot and applies it later when the owner approves, surviving
+ * the ~75s tool ceiling and a gateway restart. `kind` must match the gateway's durable
+ * executor key (taskflow.managed.create / taskflow.schedule.create); provenance (ownerKey)
+ * is derived gateway-side from the session, never carried in the action.
+ */
+async function requestDeferredApproval(params: {
   deps: TaskFlowToolDeps;
   taskFlow: BoundTaskFlowRuntime;
   ctx: OpenClawPluginToolContext;
@@ -401,7 +390,9 @@ async function requestApproval(params: {
   title: string;
   description: string;
   severity: "info" | "warning";
-}): Promise<ToolFailure | null> {
+  kind: string;
+  action: Record<string, unknown>;
+}): Promise<ToolEnvelope> {
   const request = await callApprovalRequest(params.deps, {
     pluginId: "taskflow-tools",
     title: params.title.slice(0, 80),
@@ -416,25 +407,29 @@ async function requestApproval(params: {
     turnSourceTo: params.ctx.deliveryContext?.to,
     turnSourceAccountId: params.ctx.deliveryContext?.accountId ?? params.ctx.agentAccountId,
     turnSourceThreadId: params.ctx.deliveryContext?.threadId,
-    timeoutMs: APPROVAL_TIMEOUT_MS,
-    twoPhase: true,
+    // Idempotency-keyed by tool call so a retried tool call reuses the same durable
+    // approval instead of stacking duplicates.
+    durable: {
+      kind: params.kind,
+      action: params.action,
+      idempotencyKey: params.toolCallId,
+    },
   });
-  if (!request?.id || request.decision === null) {
-    return failure("approval_unavailable", "Approval request was not accepted.");
-  }
-  const decision = request.decision ?? (await callApprovalWait(params.deps, request.id))?.decision;
-  if (decision === "deny" || decision === null || decision === undefined) {
-    return failure("approval_not_granted", "Approval was denied, expired, or unavailable.", {
-      approvalId: request.id,
+  if (request?.status === "pending_approval" && request.id) {
+    return success({
+      toolName: params.toolName,
+      result: {
+        status: "pending_approval",
+        approvalId: request.id,
+        actionHash: request.actionHash,
+        expiresAtMs: request.expiresAtMs,
+        message:
+          "Approval requested. The action runs automatically once the owner approves it; " +
+          "no further tool call is needed.",
+      },
     });
   }
-  if (decision !== "allow-once") {
-    return failure("approval_decision_invalid", "Only allow-once approvals are accepted.", {
-      approvalId: request.id,
-      decision,
-    });
-  }
-  return null;
+  return failure("approval_unavailable", "Durable approval request was not accepted.");
 }
 
 async function callCronAdd(deps: TaskFlowToolDeps, job: Record<string, unknown>): Promise<unknown> {
@@ -494,21 +489,9 @@ async function executeTool(params: {
         input: params.input,
         normalized,
         run: async () => {
-          if (cfg.requireCreateApproval) {
-            const approvalFailure = await requestApproval({
-              deps: params.deps,
-              taskFlow,
-              ctx: params.ctx,
-              toolName: params.toolName,
-              toolCallId: params.toolCallId,
-              title: "Create managed TaskFlow",
-              description: `Create a managed TaskFlow for: ${compactApprovalText(normalized.goal, 220)}`,
-              severity: "info",
-            });
-            if (approvalFailure) {
-              return approvalFailure;
-            }
-          }
+          // Managed-flow creation is owner-delegated one-shot work, not a recurring
+          // commitment, so it is never gated (operator policy: approval is only for
+          // scheduled/recurring commitments + external side effects). Created inline.
           const flow = taskFlow.createManaged({
             controllerId: CONTROLLER_ID,
             goal: normalized.goal,
@@ -584,7 +567,11 @@ async function executeTool(params: {
           }
           assertExpectedRevision(flow, normalized.expectedRevision);
           if (cfg.requireCancelApproval) {
-            const approvalFailure = await requestApproval({
+            // Deferred durable approval: return `pending` now; the gateway applier
+            // cancels the flow when the owner approves. Revisionless — the action snapshot
+            // carries only the flow id, and the applier cancels whatever state the flow is
+            // in at approval time (the captured expectedRevision would be stale by then).
+            return requestDeferredApproval({
               deps: params.deps,
               taskFlow,
               ctx: params.ctx,
@@ -593,10 +580,9 @@ async function executeTool(params: {
               title: "Cancel managed TaskFlow",
               description: `Request cancellation for TaskFlow ${flow.flowId}: ${compactApprovalText(flow.goal, 220)}`,
               severity: "warning",
+              kind: "taskflow.managed.cancel",
+              action: { flowId: normalized.flowId },
             });
-            if (approvalFailure) {
-              return approvalFailure;
-            }
           }
           const cancelled = taskFlow.requestCancel({
             flowId: normalized.flowId,
@@ -630,8 +616,13 @@ async function executeTool(params: {
         input: params.input,
         normalized,
         run: async () => {
+          const job = buildCronJob(normalized);
           if (cfg.requireScheduleApproval) {
-            const approvalFailure = await requestApproval({
+            // Deferred durable approval: return `pending` now; the gateway applier adds
+            // the cron job (idempotently, deterministic id) when the owner approves, not
+            // inline here. The pre-built job snapshot is the action. `kind` matches the
+            // gateway durable executor key.
+            return requestDeferredApproval({
               deps: params.deps,
               taskFlow,
               ctx: params.ctx,
@@ -640,12 +631,10 @@ async function executeTool(params: {
               title: "Create scheduled agent task",
               description: describeScheduleApproval(normalized),
               severity: "warning",
+              kind: "taskflow.schedule.create",
+              action: job,
             });
-            if (approvalFailure) {
-              return approvalFailure;
-            }
           }
-          const job = buildCronJob(normalized);
           const cronResult = await callCronAdd(params.deps, job);
           return success({
             toolName: params.toolName,
@@ -678,7 +667,9 @@ async function executeTool(params: {
         normalized,
         run: async () => {
           if (cfg.requireScheduleApproval) {
-            const approvalFailure = await requestApproval({
+            // Deferred durable approval: return `pending` now; the gateway applier removes
+            // the cron job (idempotently) when the owner approves.
+            return requestDeferredApproval({
               deps: params.deps,
               taskFlow,
               ctx: params.ctx,
@@ -687,10 +678,9 @@ async function executeTool(params: {
               title: "Cancel scheduled agent task",
               description: `Request cancellation for schedule ${normalized.scheduleId}`,
               severity: "warning",
+              kind: "taskflow.schedule.cancel",
+              action: { scheduleId: normalized.scheduleId },
             });
-            if (approvalFailure) {
-              return approvalFailure;
-            }
           }
           const cronResult = await callCronRemove(params.deps, normalized.scheduleId);
           return success({

@@ -223,7 +223,7 @@ export function deriveTaskFlowStatusFromTask(
   return "failed";
 }
 
-function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
+export function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
   return (
     status === "succeeded" ||
     status === "blocked" ||

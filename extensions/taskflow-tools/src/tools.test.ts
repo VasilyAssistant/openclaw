@@ -108,7 +108,6 @@ function createTaskFlowDetailsRuntime(): BoundTaskFlowDetailsRuntime {
 function createHarness(
   options: {
     pluginConfig?: Record<string, unknown>;
-    approvalDecision?: "allow-once" | "deny";
     taskFlow?: BoundTaskFlowRuntime;
     taskFlowDetails?: BoundTaskFlowDetailsRuntime;
     gatewayCaller?: GatewayCaller;
@@ -119,10 +118,13 @@ function createHarness(
   const taskFlow = options.taskFlow ?? createTaskFlowRuntime();
   const taskFlowDetails = options.taskFlowDetails ?? createTaskFlowDetailsRuntime();
   const keyedStore = createKeyedStore();
-  const requestApproval = vi.fn(async () => ({ id: "approval-1" }));
-  const waitApprovalDecision = vi.fn(async () => ({
+  // All gated taskflow paths are deferred (durable): they carry a `durable` field and
+  // resolve to a `pending_approval` acknowledgement, never a synchronous decision.
+  const requestApproval = vi.fn(async () => ({
+    status: "pending_approval" as const,
     id: "approval-1",
-    decision: options.approvalDecision ?? "allow-once",
+    actionHash: "sha256:test",
+    expiresAtMs: 1_000,
   }));
   const api = {
     pluginConfig: options.pluginConfig ?? {},
@@ -167,7 +169,6 @@ function createHarness(
         : {
             nowMs: options.nowMs,
             requestApproval,
-            waitApprovalDecision,
             callGatewayTool: options.gatewayCaller,
           },
     ).map((tool) => [tool.name, tool]),
@@ -179,7 +180,6 @@ function createHarness(
     taskFlowDetails,
     keyedStore,
     requestApproval,
-    waitApprovalDecision,
     tools,
   };
 }
@@ -197,7 +197,9 @@ describe("taskflow-tools trusted plugin", () => {
     ]);
   });
 
-  it("requires approval before creating a managed flow and makes it visible to list/get", async () => {
+  it("creates a managed flow inline without approval (never gated), visible to list/get", async () => {
+    // Managed-flow creation is owner-delegated one-shot work, never gated — even with
+    // requireCreateApproval on (the default) it is created inline, not deferred.
     const harness = createHarness();
 
     const created = expectOk(
@@ -209,15 +211,7 @@ describe("taskflow-tools trusted plugin", () => {
       }),
     );
 
-    expect(harness.requestApproval).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginId: "taskflow-tools",
-        toolName: "taskflow_create_managed",
-        allowedDecisions: ["allow-once", "deny"],
-        twoPhase: true,
-      }),
-    );
-    expect(harness.waitApprovalDecision).toHaveBeenCalledWith("approval-1");
+    expect(harness.requestApproval).not.toHaveBeenCalled();
     expect(harness.taskFlow.createManaged).toHaveBeenCalledWith(
       expect.objectContaining({
         controllerId: "taskflow-tools/agent",
@@ -238,49 +232,8 @@ describe("taskflow-tools trusted plugin", () => {
     expect(got.flowId).toBe(flowId);
   });
 
-  it("keeps gateway approval waits below the outer agent tool timeout", async () => {
-    const gatewayCaller = vi.fn<GatewayCaller>(async (method) => {
-      if (method === "plugin.approval.request") {
-        return { id: "approval-1" };
-      }
-      if (method === "plugin.approval.waitDecision") {
-        return { id: "approval-1", decision: "allow-once" };
-      }
-      throw new Error(`unexpected gateway method: ${method}`);
-    });
-    const harness = createHarness({ approvalViaGateway: true, gatewayCaller });
-
-    expectOk(
-      await harness.tools.taskflow_create_managed.execute("create-gateway-approval", {
-        goal: "Create with gateway approval",
-        idempotencyKey: "gateway-approval-create",
-      }),
-    );
-
-    expect(gatewayCaller).toHaveBeenNthCalledWith(
-      1,
-      "plugin.approval.request",
-      { timeoutMs: 85_000 },
-      expect.objectContaining({
-        timeoutMs: 75_000,
-        twoPhase: true,
-      }),
-      { expectFinal: false },
-    );
-    expect(gatewayCaller).toHaveBeenNthCalledWith(
-      2,
-      "plugin.approval.waitDecision",
-      { timeoutMs: 85_000 },
-      { id: "approval-1" },
-    );
-    expect((gatewayCaller.mock.calls[0][2] as { timeoutMs?: number }).timeoutMs).toBeLessThan(
-      90_000,
-    );
-    expect(gatewayCaller.mock.calls[1][1].timeoutMs).toBeLessThan(90_000);
-  });
-
   it("includes sanitized linked task details on get results when runtime details are available", async () => {
-    const harness = createHarness();
+    const harness = createHarness({ pluginConfig: { requireCreateApproval: false } });
     const created = expectOk(
       await harness.tools.taskflow_create_managed.execute("create-detail", {
         goal: "Track linked child",
@@ -332,21 +285,7 @@ describe("taskflow-tools trusted plugin", () => {
     ]);
   });
 
-  it("does not create a flow when approval is denied", async () => {
-    const harness = createHarness({ approvalDecision: "deny" });
-
-    expectError(
-      await harness.tools.taskflow_create_managed.execute("create-denied", {
-        goal: "Do not create this",
-        idempotencyKey: "denied-create",
-      }),
-      "approval_not_granted",
-    );
-
-    expect(harness.taskFlow.createManaged).not.toHaveBeenCalled();
-  });
-
-  it("requires approval before requesting managed flow cancellation", async () => {
+  it("defers a managed flow cancellation behind a durable approval (revisionless)", async () => {
     const harness = createHarness();
     const created = expectOk(
       await harness.tools.taskflow_create_managed.execute("create-cancel-target", {
@@ -355,9 +294,8 @@ describe("taskflow-tools trusted plugin", () => {
       }),
     );
     harness.requestApproval.mockClear();
-    harness.waitApprovalDecision.mockClear();
 
-    const cancelled = expectOk(
+    const result = expectOk(
       await harness.tools.taskflow_request_cancel.execute("cancel-1", {
         flowId: created.flowId,
         expectedRevision: created.revision,
@@ -369,51 +307,26 @@ describe("taskflow-tools trusted plugin", () => {
       expect.objectContaining({
         toolName: "taskflow_request_cancel",
         title: "Cancel managed TaskFlow",
-        allowedDecisions: ["allow-once", "deny"],
+        durable: expect.objectContaining({
+          kind: "taskflow.managed.cancel",
+          // Revisionless: only the flow id is captured; the gateway cancels current state.
+          action: { flowId: created.flowId },
+        }),
       }),
     );
-    expect(harness.waitApprovalDecision).toHaveBeenCalledWith("approval-1");
-    expect(harness.taskFlow.requestCancel).toHaveBeenCalledWith({
-      flowId: created.flowId,
-      expectedRevision: created.revision,
-    });
-    expect(cancelled.revision).toBe(2);
+    // Deferred: no inline requestCancel — the gateway cancels on approval.
+    expect(harness.taskFlow.requestCancel).not.toHaveBeenCalled();
+    expect((result.result as { status: string }).status).toBe("pending_approval");
   });
 
-  it("creates approved schedules through validated cron.add requests", async () => {
-    const gatewayCaller = vi.fn<GatewayCaller>(async (method, _options, params) => {
-      expect(method).toBe("cron.add");
-      expect(params).toEqual({
-        job: expect.objectContaining({
-          name: "Standup reminder",
-          schedule: { kind: "at", at: "2026-05-23T12:00:00.000Z" },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          deleteAfterRun: true,
-          delivery: {
-            mode: "announce",
-            channel: "telegram",
-            to: "chat-1",
-            accountId: "account-1",
-            threadId: "topic-1",
-          },
-        }),
-      });
-      return {
-        id: "cron-1",
-        name: "Standup reminder",
-        schedule: { kind: "at", at: "2026-05-23T12:00:00.000Z" },
-        payload: { kind: "agentTurn", message: "hidden" },
-        delivery: { channel: "telegram", to: "chat-1" },
-        state: "scheduled",
-      };
-    });
+  it("defers a scheduled task behind a durable approval instead of adding cron inline", async () => {
+    const gatewayCaller = vi.fn<GatewayCaller>();
     const harness = createHarness({
       gatewayCaller,
       nowMs: () => Date.parse("2026-05-23T11:00:00.000Z"),
     });
 
-    const scheduled = expectOk(
+    const result = expectOk(
       await harness.tools.taskflow_request_schedule.execute("schedule-1", {
         taskType: "reminder",
         title: "Standup reminder",
@@ -427,15 +340,19 @@ describe("taskflow-tools trusted plugin", () => {
       expect.objectContaining({
         toolName: "taskflow_request_schedule",
         description: expect.stringContaining("Schedule: once at 2026-05-23T12:00:00.000Z"),
+        durable: expect.objectContaining({
+          kind: "taskflow.schedule.create",
+          idempotencyKey: "schedule-1",
+          action: expect.objectContaining({
+            name: "Standup reminder",
+            schedule: { kind: "at", at: "2026-05-23T12:00:00.000Z" },
+          }),
+        }),
       }),
     );
-    expect(gatewayCaller).toHaveBeenCalledOnce();
-    expect((scheduled.result as { cronJob: Record<string, unknown> }).cronJob).toMatchObject({
-      id: "cron-1",
-    });
-    expect((scheduled.result as { cronJob: Record<string, unknown> }).cronJob).not.toHaveProperty(
-      "payload",
-    );
+    // Deferred: cron is not touched inline; the gateway adds the job on approval.
+    expect(gatewayCaller).not.toHaveBeenCalled();
+    expect((result.result as { status: string }).status).toBe("pending_approval");
   });
 
   it("lists schedules through sanitized cron.list requests", async () => {
@@ -485,15 +402,11 @@ describe("taskflow-tools trusted plugin", () => {
     expect(jobs[0]).not.toHaveProperty("payload");
   });
 
-  it("requires approval before cancelling a schedule through cron.remove", async () => {
-    const gatewayCaller = vi.fn<GatewayCaller>(async (method, _options, params) => {
-      expect(method).toBe("cron.remove");
-      expect(params).toEqual({ id: "cron-1" });
-      return { removed: true, id: "cron-1" };
-    });
+  it("defers a schedule cancellation behind a durable approval", async () => {
+    const gatewayCaller = vi.fn<GatewayCaller>();
     const harness = createHarness({ gatewayCaller });
 
-    const cancelled = expectOk(
+    const result = expectOk(
       await harness.tools.taskflow_request_schedule_cancel.execute("schedule-cancel-1", {
         scheduleId: "cron-1",
         idempotencyKey: "cancel-cron-1",
@@ -504,14 +417,15 @@ describe("taskflow-tools trusted plugin", () => {
       expect.objectContaining({
         toolName: "taskflow_request_schedule_cancel",
         title: "Cancel scheduled agent task",
-        description: expect.stringContaining("cron-1"),
+        durable: expect.objectContaining({
+          kind: "taskflow.schedule.cancel",
+          action: { scheduleId: "cron-1" },
+        }),
       }),
     );
-    expect(gatewayCaller).toHaveBeenCalledOnce();
-    expect(cancelled.result).toEqual({
-      scheduleId: "cron-1",
-      cronResult: { removed: true, id: "cron-1" },
-    });
+    // Deferred: cron is not touched inline; the gateway removes the job on approval.
+    expect(gatewayCaller).not.toHaveBeenCalled();
+    expect((result.result as { status: string }).status).toBe("pending_approval");
   });
 
   it("rejects unsafe schedule recurrence before approval or cron", async () => {

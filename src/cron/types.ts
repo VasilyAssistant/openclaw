@@ -337,6 +337,11 @@ export type CronStoreFile = {
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
   state?: Partial<CronJobState>;
+  // Optional caller-supplied id. When set, `add` is idempotent: an existing job
+  // with this id is returned unchanged instead of scheduling a duplicate. Lets an
+  // at-least-once applier (durable approvals) derive the id from its approval so a
+  // retry/crash-replay does not double-schedule. Omit for the normal random-id path.
+  id?: string;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */

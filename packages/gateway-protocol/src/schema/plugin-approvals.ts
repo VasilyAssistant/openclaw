@@ -36,6 +36,22 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_PLUGIN_APPROVAL_TIMEOUT_MS })),
     twoPhase: Type.Optional(Type.Boolean()),
+    // Deferred (durable, non-blocking) mode. Presence opts in: the request is
+    // persisted and returns `pending` immediately instead of holding the call
+    // open for a synchronous decision, so a scheduled-task approval can wait
+    // hours and survive a gateway restart. `kind` + `action` are the immutable
+    // snapshot the gateway hashes and binds the later decision to; provenance is
+    // never plugin-supplied, so it is derived gateway-side, not carried here.
+    durable: Type.Optional(
+      Type.Object(
+        {
+          kind: NonEmptyString,
+          action: Type.Unknown(),
+          idempotencyKey: Type.Optional(NonEmptyString),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

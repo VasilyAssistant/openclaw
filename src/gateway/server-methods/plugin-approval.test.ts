@@ -1,7 +1,13 @@
 // Plugin approval tests cover requested/resolved plugin approval events,
 // requester visibility, broadcast behavior, and approval manager integration.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import type { DurableApprovalApplier } from "../durable-approval-apply.js";
+import { DurableApprovalService } from "../durable-approval-service.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -718,5 +724,249 @@ describe("createPluginApprovalHandlers", () => {
       expect(error.code).toBe("INVALID_REQUEST");
       expect(error.message).toBe("unknown or expired approval id");
     });
+  });
+});
+
+describe("plugin.approval.request deferred (durable) mode", () => {
+  const tempDirs: string[] = [];
+
+  function durableService(): DurableApprovalService {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-approval-durable-"));
+    tempDirs.push(dir);
+    return new DurableApprovalService({ env: { OPENCLAW_STATE_DIR: dir } });
+  }
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const durableParams = {
+    title: "Create scheduled agent task",
+    description: "nightly summary",
+    severity: "warning",
+    agentId: "ops",
+    sessionKey: "agent:ops:s",
+    durable: {
+      kind: "taskflow.schedule.create",
+      action: { name: "nightly", cron: "0 9 * * 1-5" },
+      idempotencyKey: "idem-1",
+    },
+  };
+
+  it("persists the snapshot and returns pending without holding the call or using the in-memory manager", async () => {
+    const manager = createManager();
+    const service = durableService();
+    const handlers = createPluginApprovalHandlers(manager, { durableService: service });
+    const options = createMockOptions("plugin.approval.request", durableParams);
+
+    await handlers["plugin.approval.request"](options);
+
+    const call = responseCall(options.respond);
+    expect(call.ok).toBe(true);
+    const result = responseResult(options.respond);
+    expect(result.status).toBe("pending_approval");
+    const id = result.id as string;
+    expect(id.startsWith("plugin:")).toBe(true);
+    expect((result.actionHash as string).startsWith("sha256:")).toBe(true);
+
+    // Durable record persisted; the in-memory manager stays empty (no awaited promise).
+    const stored = service.get(id);
+    expect(stored?.status).toBe("pending");
+    expect(stored?.kind).toBe("taskflow.schedule.create");
+    expect(stored?.requesterActor).toBe("agent:ops:s");
+    expect(manager.listPendingRecords()).toHaveLength(0);
+  });
+
+  it("is idempotent: a retried deferred request reuses the same durable record", async () => {
+    const manager = createManager();
+    const service = durableService();
+    const handlers = createPluginApprovalHandlers(manager, { durableService: service });
+
+    const first = createMockOptions("plugin.approval.request", durableParams);
+    await handlers["plugin.approval.request"](first);
+    const second = createMockOptions("plugin.approval.request", durableParams);
+    await handlers["plugin.approval.request"](second);
+
+    expect(responseResult(first.respond).id).toBe(responseResult(second.respond).id);
+  });
+
+  it("fails closed when durable mode is requested but not configured", async () => {
+    const manager = createManager();
+    const handlers = createPluginApprovalHandlers(manager); // no durableService
+    const options = createMockOptions("plugin.approval.request", durableParams);
+
+    await handlers["plugin.approval.request"](options);
+
+    const call = responseCall(options.respond);
+    expect(call.ok).toBe(false);
+    expect(responseError(options.respond).code).toBe("INVALID_REQUEST");
+    expect(manager.listPendingRecords()).toHaveLength(0);
+  });
+
+  async function createDeferredId(
+    handlers: ReturnType<typeof createPluginApprovalHandlers>,
+  ): Promise<string> {
+    const request = createMockOptions("plugin.approval.request", durableParams);
+    await handlers["plugin.approval.request"](request);
+    return responseResult(request.respond).id as string;
+  }
+
+  it("resolves a durable approval against the store, not the in-memory manager", async () => {
+    const service = durableService();
+    const handlers = createPluginApprovalHandlers(createManager(), { durableService: service });
+    const id = await createDeferredId(handlers);
+
+    const resolve = createMockOptions("plugin.approval.resolve", { id, decision: "allow-once" });
+    await handlers["plugin.approval.resolve"](resolve);
+
+    expect(responseCall(resolve.respond).ok).toBe(true);
+    expect(responseResult(resolve.respond).status).toBe("approved");
+    expect(service.get(id)?.status).toBe("approved");
+    expect(service.get(id)?.decision).toBe("approve");
+  });
+
+  it("maps deny to a durable denial", async () => {
+    const service = durableService();
+    const handlers = createPluginApprovalHandlers(createManager(), { durableService: service });
+    const id = await createDeferredId(handlers);
+
+    const resolve = createMockOptions("plugin.approval.resolve", { id, decision: "deny" });
+    await handlers["plugin.approval.resolve"](resolve);
+
+    expect(service.get(id)?.status).toBe("denied");
+  });
+
+  it("is replay-safe: a repeated resolve is an idempotent no-op", async () => {
+    const service = durableService();
+    const handlers = createPluginApprovalHandlers(createManager(), { durableService: service });
+    const id = await createDeferredId(handlers);
+
+    const first = createMockOptions("plugin.approval.resolve", { id, decision: "allow-once" });
+    await handlers["plugin.approval.resolve"](first);
+    const second = createMockOptions("plugin.approval.resolve", { id, decision: "allow-once" });
+    await handlers["plugin.approval.resolve"](second);
+
+    expect(responseCall(second.respond).ok).toBe(true);
+    expect(responseResult(second.respond).outcome).toBe("already");
+    expect(service.get(id)?.status).toBe("approved");
+  });
+
+  function mockForwarder(impl: () => Promise<boolean> = () => Promise.resolve(true)): {
+    forwarder: ExecApprovalForwarder;
+    handlePluginApprovalRequested: ReturnType<typeof vi.fn>;
+    handlePluginApprovalResolved: ReturnType<typeof vi.fn>;
+  } {
+    const handlePluginApprovalRequested = vi.fn(impl);
+    const handlePluginApprovalResolved = vi.fn(() => Promise.resolve());
+    return {
+      forwarder: {
+        handlePluginApprovalRequested,
+        handlePluginApprovalResolved,
+      } as unknown as ExecApprovalForwarder,
+      handlePluginApprovalRequested,
+      handlePluginApprovalResolved,
+    };
+  }
+
+  it("forwards the approval card carrying the durable id and request snapshot", async () => {
+    const service = durableService();
+    const { forwarder, handlePluginApprovalRequested } = mockForwarder(() => Promise.resolve(true));
+    const handlers = createPluginApprovalHandlers(createManager(), {
+      durableService: service,
+      forwarder,
+    });
+    const options = createMockOptions("plugin.approval.request", durableParams);
+
+    await handlers["plugin.approval.request"](options);
+
+    const id = responseResult(options.respond).id as string;
+    expect(handlePluginApprovalRequested).toHaveBeenCalledTimes(1);
+    const event = handlePluginApprovalRequested.mock.calls[0][0] as {
+      id: string;
+      request: { title: string };
+    };
+    expect(event.id).toBe(id);
+    expect(event.request.title).toBe(durableParams.title);
+  });
+
+  it("returns pending and keeps the record even when card delivery rejects", async () => {
+    const service = durableService();
+    // Delivery is best-effort: a forwarder rejection must not fail the persisted
+    // request, so the owner can still resolve it out-of-band.
+    const { forwarder } = mockForwarder(() => Promise.reject(new Error("telegram down")));
+    const handlers = createPluginApprovalHandlers(createManager(), {
+      durableService: service,
+      forwarder,
+    });
+    const options = createMockOptions("plugin.approval.request", durableParams);
+
+    await handlers["plugin.approval.request"](options);
+
+    expect(responseCall(options.respond).ok).toBe(true);
+    expect(responseResult(options.respond).status).toBe("pending_approval");
+    const id = responseResult(options.respond).id as string;
+    expect(service.get(id)?.status).toBe("pending");
+  });
+
+  it("forwards a resolved event to clear the card on the decision transition", async () => {
+    const service = durableService();
+    const { forwarder, handlePluginApprovalResolved } = mockForwarder();
+    const handlers = createPluginApprovalHandlers(createManager(), {
+      durableService: service,
+      forwarder,
+    });
+    const id = await createDeferredId(handlers);
+
+    const resolve = createMockOptions("plugin.approval.resolve", { id, decision: "allow-once" });
+    await handlers["plugin.approval.resolve"](resolve);
+
+    expect(handlePluginApprovalResolved).toHaveBeenCalledTimes(1);
+    const event = handlePluginApprovalResolved.mock.calls[0][0] as { id: string; decision: string };
+    expect(event.id).toBe(id);
+    expect(event.decision).toBe("allow-once");
+  });
+
+  it("triggers the applier on an approval but not on a denial", async () => {
+    const service = durableService();
+    const applyById = vi.fn(() => Promise.resolve({ applied: [], failed: [], skipped: [] }));
+    const applier = { applyById } as unknown as DurableApprovalApplier;
+    const handlers = createPluginApprovalHandlers(createManager(), {
+      durableService: service,
+      applier,
+    });
+
+    const approveId = await createDeferredId(handlers);
+    await handlers["plugin.approval.resolve"](
+      createMockOptions("plugin.approval.resolve", { id: approveId, decision: "allow-once" }),
+    );
+    expect(applyById).toHaveBeenCalledWith(approveId);
+
+    applyById.mockClear();
+    const denyId = await createDeferredId(handlers);
+    await handlers["plugin.approval.resolve"](
+      createMockOptions("plugin.approval.resolve", { id: denyId, decision: "deny" }),
+    );
+    // Denials transition to `denied`, never `approved`, so no apply is triggered.
+    expect(applyById).not.toHaveBeenCalled();
+  });
+
+  it("does not re-forward a resolved event on a replayed resolve", async () => {
+    const service = durableService();
+    const { forwarder, handlePluginApprovalResolved } = mockForwarder();
+    const handlers = createPluginApprovalHandlers(createManager(), {
+      durableService: service,
+      forwarder,
+    });
+    const id = await createDeferredId(handlers);
+
+    const first = createMockOptions("plugin.approval.resolve", { id, decision: "allow-once" });
+    await handlers["plugin.approval.resolve"](first);
+    const second = createMockOptions("plugin.approval.resolve", { id, decision: "allow-once" });
+    await handlers["plugin.approval.resolve"](second);
+
+    // Only the real `recorded` transition clears the card; the replay is a no-op.
+    expect(handlePluginApprovalResolved).toHaveBeenCalledTimes(1);
   });
 });

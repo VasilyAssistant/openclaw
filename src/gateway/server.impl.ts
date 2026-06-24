@@ -1165,6 +1165,7 @@ export async function startGatewayServer(
             startChannel,
             stopChannel,
             logChannels,
+            cron: runtimeState.cronState.cron,
           }),
           coreGatewayHandlers: coreGatewayHandlersLocal,
         };

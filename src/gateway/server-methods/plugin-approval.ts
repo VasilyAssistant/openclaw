@@ -14,6 +14,8 @@ import {
   resolvePluginApprovalRequestAllowedDecisions,
   resolvePluginApprovalTimeoutMs,
 } from "../../infra/plugin-approvals.js";
+import type { DurableApprovalApplier } from "../durable-approval-apply.js";
+import type { DurableApprovalService } from "../durable-approval-service.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalRequesterMetadata,
@@ -27,10 +29,20 @@ import {
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+type PluginDurableApprovalParams = {
+  kind: string;
+  action: unknown;
+  idempotencyKey?: string | null;
+};
+
 /** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  opts?: { forwarder?: ExecApprovalForwarder },
+  opts?: {
+    forwarder?: ExecApprovalForwarder;
+    durableService?: DurableApprovalService;
+    applier?: DurableApprovalApplier;
+  },
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async ({ respond, client }) => {
@@ -94,6 +106,64 @@ export function createPluginApprovalHandlers(
         turnSourceAccountId: normalizeTrimmedString(p.turnSourceAccountId),
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
+
+      // Deferred (durable, non-blocking) mode: persist the action snapshot and
+      // return `pending` immediately instead of holding the call open. The owner
+      // can decide hours later and the request survives a gateway restart. Fail
+      // closed if durable mode is requested but not configured, so a deferred
+      // request never silently blocks instead.
+      const durable = (params as { durable?: PluginDurableApprovalParams }).durable;
+      if (durable) {
+        if (!opts?.durableService) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "durable plugin approvals are not enabled"),
+          );
+          return;
+        }
+        const durableRecord = opts.durableService.createDeferred({
+          id: `plugin:${randomUUID()}`,
+          kind: durable.kind,
+          action: durable.action,
+          idempotencyKey: normalizeTrimmedString(durable.idempotencyKey) ?? undefined,
+          title: request.title,
+          description: request.description,
+          risk: normalizeTrimmedString(p.severity) ?? undefined,
+          // Provenance is derived from the trusted request, never plugin-supplied.
+          requesterActor: request.sessionKey ?? request.agentId ?? undefined,
+        });
+
+        // Deliver the approval card now, but do not hold the call: the record is
+        // persisted and we return `pending` below. The card's buttons carry the
+        // `plugin:` id and resolve against the durable store, so they keep working
+        // for hours and across a gateway restart even though this connection is
+        // gone. Best-effort: a delivery failure must not fail the persisted
+        // request — the owner can still resolve it out-of-band.
+        const requestEvent = {
+          id: durableRecord.id,
+          request,
+          createdAtMs: durableRecord.createdAtMs,
+          expiresAtMs: durableRecord.expiresAtMs,
+        };
+        void opts.forwarder?.handlePluginApprovalRequested?.(requestEvent).catch((err: unknown) => {
+          context.logGateway?.error?.(
+            `plugin approvals: forward durable request failed: ${String(err)}`,
+          );
+        });
+
+        respond(
+          true,
+          {
+            status: "pending_approval",
+            id: durableRecord.id,
+            actionHash: durableRecord.actionHash,
+            expiresAtMs: durableRecord.expiresAtMs,
+          },
+          undefined,
+        );
+        return;
+      }
 
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
@@ -159,6 +229,69 @@ export function createPluginApprovalHandlers(
         return;
       }
       const { inputId, decision } = resolveParams;
+
+      // Durable (deferred) approvals are resolved against the store, not the
+      // in-memory manager: the id outlives the connection and the process, so a
+      // decision can land hours later or after a restart. Exact-id match — card
+      // buttons carry the full `plugin:` id. Replay-safe: an already-resolved or
+      // expired row returns its current state instead of erroring. Resume/apply
+      // on approval is wired in the resume slice.
+      const durableRecord = opts?.durableService?.get(inputId);
+      if (durableRecord) {
+        const resolvedBy =
+          client?.connect?.client?.displayName ?? client?.connect?.client?.id ?? "owner";
+        const result = opts!.durableService!.recordDecision(
+          inputId,
+          decision === "deny" ? "deny" : "approve",
+          resolvedBy,
+        );
+        if (!result.ok) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
+          );
+          return;
+        }
+
+        // Clear the delivered card's buttons on the real decision transition only.
+        // `recorded` is the one state change; `already`/`expired` are replays whose
+        // card was finalized the first time, so re-forwarding would be a redundant
+        // edit. Best-effort and non-blocking — the durable decision is already
+        // committed. After a gateway restart the in-memory pending entry is gone, so
+        // the channel finalize is a no-op then; the persisted card stays tappable
+        // and resolves idempotently.
+        if (result.outcome === "recorded") {
+          const resolvedEvent = { id: inputId, decision, resolvedBy, ts: Date.now() };
+          void opts?.forwarder
+            ?.handlePluginApprovalResolved?.(resolvedEvent)
+            .catch((err: unknown) => {
+              context.logGateway?.error?.(
+                `plugin approvals: forward durable resolve failed: ${String(err)}`,
+              );
+            });
+
+          // On approval, drive the side effect now (low latency). Non-blocking: the
+          // decision is already committed, apply runs to its own terminal state, and
+          // a periodic/startup sweep retries anything missed (e.g. a crash before
+          // apply). Denials transition to `denied`, not `approved`, so they never apply.
+          if (result.record.status === "approved") {
+            void opts?.applier?.applyById(inputId).catch((err: unknown) => {
+              context.logGateway?.error?.(
+                `plugin approvals: durable apply trigger failed: ${String(err)}`,
+              );
+            });
+          }
+        }
+
+        respond(
+          true,
+          { ok: true, status: result.record.status, outcome: result.outcome },
+          undefined,
+        );
+        return;
+      }
+
       await handleApprovalResolve({
         manager,
         inputId,

@@ -164,9 +164,13 @@ export type ToolEnvelope = ToolSuccess | ToolFailure;
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 export type ApprovalRequestResult = {
-  status?: "accepted";
+  // `pending_approval` is the deferred (durable) acknowledgement: the request is
+  // persisted and will be applied when the owner decides later, instead of the
+  // call holding open for a synchronous decision.
+  status?: "accepted" | "pending_approval";
   id?: string;
   decision?: ApprovalDecision | null;
+  actionHash?: string;
   createdAtMs?: number;
   expiresAtMs?: number;
 };

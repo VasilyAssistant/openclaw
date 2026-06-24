@@ -200,6 +200,41 @@ function createMissedIsolatedJob(now: number): CronJob {
 }
 
 describe("cron service ops seam coverage", () => {
+  it("add dedupes on a caller-supplied id so a retried apply does not double-schedule", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const create = {
+      id: "durable-fixed",
+      name: "nightly report",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "report" },
+    } as Parameters<typeof add>[1];
+
+    const first = await add(state, create);
+    const second = await add(state, { ...create, name: "renamed" });
+
+    expect(first.id).toBe("durable-fixed");
+    expect(second.id).toBe("durable-fixed");
+    // Existing job is returned unchanged — the retry did not overwrite or duplicate it.
+    expect(second.name).toBe("nightly report");
+    expect(state.store?.jobs.filter((job) => job.id === "durable-fixed")).toHaveLength(1);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("keeps core add paths on SQLite and leaves legacy JSON for doctor migration", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-05-20T08:00:00.000Z");

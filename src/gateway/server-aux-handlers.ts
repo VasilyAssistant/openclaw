@@ -1,6 +1,7 @@
 // Gateway auxiliary method handlers.
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronServiceContract } from "../cron/service-contract.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
@@ -18,6 +19,17 @@ import {
   type ChannelKind,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
+import { DurableApprovalApplier } from "./durable-approval-apply.js";
+import type { DurableApprovalExecutor } from "./durable-approval-apply.js";
+import { DurableApprovalService } from "./durable-approval-service.js";
+import {
+  createTaskflowScheduleCancelExecutor,
+  createTaskflowScheduleCreateExecutor,
+  TASKFLOW_MANAGED_CANCEL_KIND,
+  TASKFLOW_SCHEDULE_CANCEL_KIND,
+  TASKFLOW_SCHEDULE_CREATE_KIND,
+  taskflowManagedCancelExecutor,
+} from "./durable-approval-taskflow-executor.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
@@ -72,6 +84,10 @@ export function createGatewayAuxHandlers(params: {
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
   logChannels: { info: (msg: string) => void };
+  // Gateway cron service, used to apply approved durable `taskflow.schedule.create`
+  // approvals. Optional so lightweight handler tests need not wire cron; when absent,
+  // schedule-create approvals stay `approved` until a run with cron applies them.
+  cron?: CronServiceContract;
 }) {
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
@@ -87,12 +103,52 @@ export function createGatewayAuxHandlers(params: {
     ));
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
   const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  // Gateway-native durable backend for deferred (non-blocking) plugin approvals.
+  // Always wired: inert unless a request opts into durable mode, so it adds no
+  // behavior for synchronous approvals while surviving restarts for deferred ones.
+  const durableApprovalService = new DurableApprovalService();
+  // Executors keyed by durable-approval kind. managed-cancel is a pure core call;
+  // the schedule (cron) kinds need the gateway cron service, so they are registered
+  // only when `cron` is wired (omitted in lightweight tests). A kind with no executor
+  // is left `approved` and retried by a later sweep.
+  const durableApprovalExecutors = new Map<string, DurableApprovalExecutor>([
+    [TASKFLOW_MANAGED_CANCEL_KIND, taskflowManagedCancelExecutor],
+  ]);
+  const cronService = params.cron;
+  if (cronService) {
+    durableApprovalExecutors.set(
+      TASKFLOW_SCHEDULE_CREATE_KIND,
+      createTaskflowScheduleCreateExecutor((input) => cronService.add(input)),
+    );
+    durableApprovalExecutors.set(
+      TASKFLOW_SCHEDULE_CANCEL_KIND,
+      createTaskflowScheduleCancelExecutor((id) => cronService.remove(id)),
+    );
+  }
+  // Drives approved durable approvals to their side effect. Triggered on approve
+  // (low latency, from the resolve path) and by the startup sweep below.
+  const durableApprovalApplier = new DurableApprovalApplier(
+    durableApprovalService,
+    durableApprovalExecutors,
+    {
+      error: (message: string) => params.log.error?.(message),
+      debug: (message: string) => params.log.debug?.(message),
+    },
+  );
+  // Startup sweep: apply anything left `approved` — approved while the gateway was
+  // down, or a crash between approve and apply. Best-effort and non-blocking; apply
+  // is idempotent so overlap with the live approve-trigger is harmless.
+  void durableApprovalApplier.applyApproved().catch((err: unknown) => {
+    params.log.error?.(`durable approvals: startup apply sweep failed: ${String(err)}`);
+  });
   let pluginApprovalHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
   const loadPluginApprovalHandlers = () =>
     (pluginApprovalHandlersPromise ??= import("./server-methods/plugin-approval.js").then(
       ({ createPluginApprovalHandlers }) =>
         createPluginApprovalHandlers(pluginApprovalManager, {
           forwarder: execApprovalForwarder,
+          durableService: durableApprovalService,
+          applier: durableApprovalApplier,
         }),
     ));
   // Serialize the entire `secrets.reload` path (activation + channel restart)

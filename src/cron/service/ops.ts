@@ -1,5 +1,8 @@
 /** Public cron service operations for lifecycle, CRUD, listing, and manual runs. */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -417,6 +420,16 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
+    // Idempotent add on a caller-supplied id: a job already exists for this id
+    // (e.g. a retried apply of the same approved approval), so return it unchanged
+    // instead of scheduling a duplicate.
+    const requestedId = normalizeOptionalString(input.id);
+    if (requestedId) {
+      const existing = state.store?.jobs.find((candidate) => candidate.id === requestedId);
+      if (existing) {
+        return existing;
+      }
+    }
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
