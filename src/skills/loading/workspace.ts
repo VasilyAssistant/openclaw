@@ -1447,10 +1447,11 @@ function resolveWorkspaceSkillPromptState(
   const promptEntries = filterPromptVisibleSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  const promptFacingSkills = promptEntries.map((entry) => ({
-    ...entry.skill,
-    requiresUserApproval: entry.invocation?.requiresUserApproval === true,
-  }));
+  const promptFacingSkills = promptEntries.map((entry) =>
+    Object.assign({}, entry.skill, {
+      requiresUserApproval: entry.invocation?.requiresUserApproval === true,
+    }),
+  );
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
   // Budget checks and final render both use this same representation so the
   // tier decision is based on the exact strings that end up in the prompt.

@@ -292,7 +292,7 @@ describe("provider usage history", () => {
 
     expect(chunk?.tokensPerPercent).toBeUndefined();
     expect(chunk?.skippedReason).toBe("reset_crossed");
-    expect(buildProviderUsageEfficiencySummary([chunk!])).toEqual({
+    expect(buildProviderUsageEfficiencySummary([chunk])).toEqual({
       validChunks: 0,
       skippedChunks: 1,
       resetCrossedChunks: 1,

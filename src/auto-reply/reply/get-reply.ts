@@ -439,7 +439,7 @@ export async function getReplyFromConfig(
           commandAuthorized,
         }),
       );
-  let {
+  const {
     sessionCtx,
     sessionEntry,
     previousSessionEntry,
@@ -449,7 +449,6 @@ export async function getReplyFromConfig(
     isNewSession,
     resetTriggered,
     systemSent,
-    abortedLastRun,
     storePath,
     sessionScope,
     groupResolution,
@@ -457,6 +456,8 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  // abortedLastRun stays `let`: reassigned below from inlineActionResult.
+  let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
 
   const spawnedWorkspaceDirRaw = resolveIngressWorkspaceOverrideForSpawnedRun({

@@ -270,7 +270,7 @@ function normalizeStableJsonValue(value: unknown): unknown {
   }
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, entryValue]) => entryValue !== undefined)
-    .sort(([left], [right]) => left.localeCompare(right));
+    .toSorted(([left], [right]) => left.localeCompare(right));
   return Object.fromEntries(
     entries.map(([key, entryValue]) => [key, normalizeStableJsonValue(entryValue)]),
   );

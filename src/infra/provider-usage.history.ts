@@ -103,11 +103,15 @@ function sanitizeProviderUsageRecord(params: {
         window.label.trim() &&
         Number.isFinite(window.usedPercent),
     )
-    .map((window) => ({
-      label: window.label.trim(),
-      usedPercent: window.usedPercent,
-      ...(Number.isFinite(window.resetAt) ? { resetAt: window.resetAt } : {}),
-    }));
+    .map((window) =>
+      Object.assign(
+        {
+          label: window.label.trim(),
+          usedPercent: window.usedPercent,
+        },
+        Number.isFinite(window.resetAt) ? { resetAt: window.resetAt } : {},
+      ),
+    );
   if (!windows.length) {
     return null;
   }

@@ -221,7 +221,7 @@ function createSandboxBrowserResolver(params: {
         bridgeAuth: browserAuth,
         ssrfPolicy: resolvedBrowserConfig.ssrfPolicy,
       });
-    })().catch((error) => {
+    })().catch((error: unknown) => {
       pending = undefined;
       throw error;
     });

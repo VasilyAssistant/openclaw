@@ -382,9 +382,8 @@ export function resolveMcpRequestContext(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),
     ),
     senderIsOwner: auth.senderIsOwner,
-    allowGatewaySubagentBinding:
-      auth.senderIsOwner === true
-        ? normalizeMcpBooleanHeader(getHeader(req, "x-openclaw-allow-gateway-subagent-binding"))
-        : undefined,
+    allowGatewaySubagentBinding: auth.senderIsOwner
+      ? normalizeMcpBooleanHeader(getHeader(req, "x-openclaw-allow-gateway-subagent-binding"))
+      : undefined,
   };
 }
