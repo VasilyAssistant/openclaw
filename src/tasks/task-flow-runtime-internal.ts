@@ -6,6 +6,7 @@ export {
   failFlow,
   finishFlow,
   getTaskFlowById,
+  isTerminalTaskFlowStatus,
   listTaskFlowRecords,
   requestFlowCancel,
   resolveTaskFlowForLookupToken,

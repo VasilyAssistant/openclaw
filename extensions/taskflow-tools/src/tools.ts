@@ -395,8 +395,12 @@ async function requestDeferredApproval(params: {
 }): Promise<ToolEnvelope> {
   const request = await callApprovalRequest(params.deps, {
     pluginId: "taskflow-tools",
+    // Title/description must satisfy the gateway PluginApprovalRequestParamsSchema
+    // caps (title 80, description 256). describeScheduleApproval builds a ~280-char
+    // multi-line card, so a 512 slice passed the producer but the gateway rejected
+    // it (INVALID_REQUEST at /description) and no card was ever delivered.
     title: params.title.slice(0, 80),
-    description: params.description.slice(0, 512),
+    description: params.description.slice(0, 256),
     severity: params.severity,
     toolName: params.toolName,
     toolCallId: params.toolCallId,

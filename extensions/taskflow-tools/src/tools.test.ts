@@ -355,6 +355,37 @@ describe("taskflow-tools trusted plugin", () => {
     expect((result.result as { status: string }).status).toBe("pending_approval");
   });
 
+  it("clamps the durable schedule approval description to the gateway 256-char cap", async () => {
+    const harness = createHarness({ nowMs: () => Date.parse("2026-05-23T11:00:00.000Z") });
+    // A long message makes describeScheduleApproval (Type/Schedule/Recipient/Message)
+    // exceed the gateway PluginApprovalRequestParamsSchema cap of 256. Before the clamp
+    // the producer sliced to 512, so the request was rejected (INVALID_REQUEST at
+    // /description) and no approval card was ever delivered.
+    const longMessage =
+      "Send me a thorough daily status covering tasks, blockers, and next steps. ".repeat(6);
+
+    const result = expectOk(
+      await harness.tools.taskflow_request_schedule.execute("schedule-long", {
+        taskType: "reminder",
+        title: "Daily status",
+        message: longMessage,
+        recurrence: { kind: "cron", expr: "0 9 * * *", timezone: "Europe/Berlin" },
+        recipient: { channel: "telegram", to: "1302448470000000000" },
+        idempotencyKey: "daily-status-0900",
+      }),
+    );
+
+    const lastCall = harness.requestApproval.mock.calls.at(-1) as unknown as
+      | [{ title: string; description: string }]
+      | undefined;
+    const call = lastCall?.[0];
+    expect(call).toBeDefined();
+    expect(call!.title.length).toBeLessThanOrEqual(80);
+    expect(call!.description.length).toBeLessThanOrEqual(256);
+    expect(call!.description).toContain("Schedule: cron");
+    expect((result.result as { status: string }).status).toBe("pending_approval");
+  });
+
   it("lists schedules through sanitized cron.list requests", async () => {
     const gatewayCaller = vi.fn<GatewayCaller>(async (method, _options, params) => {
       expect(method).toBe("cron.list");

@@ -13,7 +13,7 @@ import {
   getTaskFlowById,
   isTerminalTaskFlowStatus,
   requestFlowCancel,
-} from "../tasks/task-flow-registry.js";
+} from "../tasks/task-flow-runtime-internal.js";
 import type { DurableApprovalExecutor } from "./durable-approval-apply.js";
 
 /** Kind of a durable approval whose side effect is creating a scheduled (cron) task. */
